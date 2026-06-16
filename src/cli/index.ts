@@ -30,7 +30,10 @@ function writeResult(data: any, options: { json?: boolean; output?: string }, pr
   } else {
     if (options.output) {
       // If output is specified, we can write the formatted text, or strip chalk if it's text
-      const cleanText = prettyText.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+      const cleanText = prettyText.replace(
+        /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+        '',
+      );
       fs.writeFileSync(options.output, cleanText, 'utf8');
       logger.success(`Output saved to ${options.output}`);
     } else {
@@ -93,7 +96,10 @@ program
       const feeRows = [
         ['Metric', 'Value'],
         ['Latest Ledger Base Fee', `${feeStats.last_ledger_base_fee} stroops`],
-        ['Ledgers Capacity Usage', `${Math.round(parseFloat(feeStats.ledger_capacity_usage) * 100)}%`],
+        [
+          'Ledgers Capacity Usage',
+          `${Math.round(parseFloat(feeStats.ledger_capacity_usage) * 100)}%`,
+        ],
         ['Min Accepted Fee', `${feeStats.fee_charged.min} stroops`],
         ['Max Accepted Fee', `${feeStats.fee_charged.max} stroops`],
         ['P10 Fee', `${feeStats.fee_charged.p10} stroops`],
@@ -131,7 +137,10 @@ program
       ['RPC Property', 'Value'],
       ['Status', chalk.green(info.status.toUpperCase())],
       ['Response Latency', `${info.latencyMs}ms`],
-      ['Health Status', info.health === 'healthy' ? chalk.green('HEALTHY') : String(info.health || 'UNKNOWN')],
+      [
+        'Health Status',
+        info.health === 'healthy' ? chalk.green('HEALTHY') : String(info.health || 'UNKNOWN'),
+      ],
       ['Network Passphrase', info.networkPassphrase || 'Unknown'],
       ['Protocol Version', String(info.protocolVersion ?? 'Unknown')],
       ['Latest Ledger Sequence', String(info.latestLedgerSequence ?? 'Unknown')],
@@ -171,9 +180,24 @@ program
     text += `${chalk.bold.cyan('--- Thresholds & Flags ---')}\n`;
     const tfRows = [
       ['Thresholds', 'Values', 'Flags', 'Status'],
-      ['Low Weight', String(audit.thresholds.low), 'Auth Required', audit.flags.authRequired ? 'YES' : 'NO'],
-      ['Medium Weight', String(audit.thresholds.med), 'Auth Revocable', audit.flags.authRevocable ? 'YES' : 'NO'],
-      ['High Weight', String(audit.thresholds.high), 'Auth Immutable', audit.flags.authImmutable ? 'YES' : 'NO'],
+      [
+        'Low Weight',
+        String(audit.thresholds.low),
+        'Auth Required',
+        audit.flags.authRequired ? 'YES' : 'NO',
+      ],
+      [
+        'Medium Weight',
+        String(audit.thresholds.med),
+        'Auth Revocable',
+        audit.flags.authRevocable ? 'YES' : 'NO',
+      ],
+      [
+        'High Weight',
+        String(audit.thresholds.high),
+        'Auth Immutable',
+        audit.flags.authImmutable ? 'YES' : 'NO',
+      ],
       ['', '', 'Clawback Enabled', audit.flags.authClawbackEnabled ? 'YES' : 'NO'],
     ];
     text += formatTable(tfRows);
@@ -182,8 +206,8 @@ program
     const balanceRows = [['Asset Code', 'Issuer', 'Balance', 'Limit']];
     for (const bal of audit.balances) {
       const isNative = bal.assetType === 'native';
-      const code = isNative ? 'XLM' : (bal.assetCode || 'Unknown');
-      const issuer = isNative ? 'Stellar Network' : (bal.assetIssuer?.slice(0, 10) + '...' || '-');
+      const code = isNative ? 'XLM' : bal.assetCode || 'Unknown';
+      const issuer = isNative ? 'Stellar Network' : bal.assetIssuer?.slice(0, 10) + '...' || '-';
       balanceRows.push([
         code,
         issuer,
