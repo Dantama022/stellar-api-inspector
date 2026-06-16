@@ -3,7 +3,6 @@
 import { Command } from 'commander';
 import ora from 'ora';
 import fs from 'fs';
-import path from 'path';
 import chalk from 'chalk';
 import { inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
 import { inspectSoroban } from '../inspectors/soroban';
@@ -214,7 +213,7 @@ program
     const spinner = ora(`Testing ${urls.length} endpoints...`).start();
 
     const results = await Promise.all(
-      urls.map(async (url) => {
+      urls.map(async (url: string) => {
         const info = await inspectHorizon(url);
         return {
           endpoint: url,
