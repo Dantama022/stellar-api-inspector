@@ -1,0 +1,267 @@
+#!/usr/bin/env node
+
+import { Command } from 'commander';
+import ora from 'ora';
+import fs from 'fs';
+import path from 'path';
+import chalk from 'chalk';
+import { inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
+import { inspectSoroban } from '../inspectors/soroban';
+import { auditAccount } from '../inspectors/account';
+import { formatTable, formatXlm } from '../utils/formatters';
+import { logger } from '../utils/logger';
+
+const program = new Command();
+
+program
+  .name('stellar-api-inspector')
+  .description('🔍 CLI inspection and health-checking tool for Stellar & Soroban endpoints')
+  .version('1.0.0');
+
+// Helper to write output
+function writeResult(data: any, options: { json?: boolean; output?: string }, prettyText: string) {
+  if (options.json) {
+    const jsonStr = JSON.stringify(data, null, 2);
+    if (options.output) {
+      fs.writeFileSync(options.output, jsonStr, 'utf8');
+      logger.success(`Output saved to ${options.output}`);
+    } else {
+      console.log(jsonStr);
+    }
+  } else {
+    if (options.output) {
+      // If output is specified, we can write the formatted text, or strip chalk if it's text
+      const cleanText = prettyText.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+      fs.writeFileSync(options.output, cleanText, 'utf8');
+      logger.success(`Output saved to ${options.output}`);
+    } else {
+      console.log(prettyText);
+    }
+  }
+}
+
+// 1. Horizon Endpoint Checker
+program
+  .command('horizon <url>')
+  .description('Inspect Stellar Horizon endpoint health, metadata, and fee stats')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (url, options) => {
+    if (options.verbose) logger.setLevel('debug');
+
+    const spinner = ora(`Connecting to Horizon endpoint: ${url}`).start();
+    const info = await inspectHorizon(url);
+
+    if (info.status === 'offline') {
+      spinner.fail(`Horizon endpoint is offline or unreachable.`);
+      process.exit(1);
+    }
+
+    const feeStats = await inspectHorizonFeeStats(url);
+    spinner.succeed(`Horizon inspection complete.`);
+
+    const outputData = { info, feeStats };
+
+    // Prepare console layout
+    let text = `\n${chalk.bold.green('=== Stellar Horizon API Node Inspection ===')}\n\n`;
+    const rows = [
+      ['Property', 'Value'],
+      ['Node Status', chalk.green(info.status.toUpperCase())],
+      ['Response Latency', `${info.latencyMs}ms`],
+      ['Network Passphrase', info.networkPassphrase || 'Unknown'],
+      ['Protocol Version', String(info.protocolVersion ?? 'Unknown')],
+      ['Horizon Version', info.horizonVersion || 'Unknown'],
+      ['Stellar Core Version', info.coreVersion || 'Unknown'],
+      ['History Ledger Sequence', String(info.historyLatestLedger ?? 'Unknown')],
+      ['Core Ledger Sequence', String(info.coreLatestLedger ?? 'Unknown')],
+    ];
+
+    if (info.rateLimitLimit !== undefined) {
+      rows.push(['Rate Limit (Max)', String(info.rateLimitLimit)]);
+      rows.push([
+        'Rate Limit (Remaining)',
+        info.rateLimitRemaining !== undefined && info.rateLimitRemaining < 100
+          ? chalk.red(String(info.rateLimitRemaining))
+          : String(info.rateLimitRemaining),
+      ]);
+    }
+
+    text += formatTable(rows);
+
+    if (feeStats) {
+      text += `\n${chalk.bold.cyan('--- Horizon Fee Statistics ---')}\n`;
+      const feeRows = [
+        ['Metric', 'Value'],
+        ['Latest Ledger Base Fee', `${feeStats.last_ledger_base_fee} stroops`],
+        ['Ledgers Capacity Usage', `${Math.round(parseFloat(feeStats.ledger_capacity_usage) * 100)}%`],
+        ['Min Accepted Fee', `${feeStats.fee_charged.min} stroops`],
+        ['Max Accepted Fee', `${feeStats.fee_charged.max} stroops`],
+        ['P10 Fee', `${feeStats.fee_charged.p10} stroops`],
+        ['P50 (Median) Fee', `${feeStats.fee_charged.p50} stroops`],
+        ['P99 Fee', `${feeStats.fee_charged.p99} stroops`],
+      ];
+      text += formatTable(feeRows);
+    }
+
+    writeResult(outputData, options, text);
+  });
+
+// 2. Soroban RPC Checker
+program
+  .command('soroban <url>')
+  .description('Inspect Soroban RPC health and synchronization parameters')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (url, options) => {
+    if (options.verbose) logger.setLevel('debug');
+
+    const spinner = ora(`Querying Soroban RPC: ${url}`).start();
+    const info = await inspectSoroban(url);
+
+    if (info.status === 'offline') {
+      spinner.fail(`Soroban RPC endpoint is offline or unreachable.`);
+      process.exit(1);
+    }
+
+    spinner.succeed(`Soroban inspection complete.`);
+
+    let text = `\n${chalk.bold.green('=== Soroban RPC Node Inspection ===')}\n\n`;
+    const rows = [
+      ['RPC Property', 'Value'],
+      ['Status', chalk.green(info.status.toUpperCase())],
+      ['Response Latency', `${info.latencyMs}ms`],
+      ['Health Status', info.health === 'healthy' ? chalk.green('HEALTHY') : String(info.health || 'UNKNOWN')],
+      ['Network Passphrase', info.networkPassphrase || 'Unknown'],
+      ['Protocol Version', String(info.protocolVersion ?? 'Unknown')],
+      ['Latest Ledger Sequence', String(info.latestLedgerSequence ?? 'Unknown')],
+    ];
+
+    text += formatTable(rows);
+
+    writeResult(info, options, text);
+  });
+
+// 3. Account Auditor
+program
+  .command('account <accountId>')
+  .description('Audit balances, thresholds, flags, and signers of a Stellar account')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (accountId, options) => {
+    if (options.verbose) logger.setLevel('debug');
+
+    const spinner = ora(`Auditing Account ${accountId.slice(0, 8)}...`).start();
+    const audit = await auditAccount(options.horizon, accountId);
+
+    if (!audit) {
+      spinner.fail(`Failed to load account from Horizon endpoint. Ensure address is valid.`);
+      process.exit(1);
+    }
+
+    spinner.succeed(`Account audit complete.`);
+
+    let text = `\n${chalk.bold.green('=== Stellar Account Audit ===')}\n`;
+    text += `${chalk.cyan('Account ID:')} ${audit.accountId}\n`;
+    text += `${chalk.cyan('Sequence:')}   ${audit.sequence}\n`;
+    text += `${chalk.cyan('Subentries:')} ${audit.subentryCount}\n\n`;
+
+    text += `${chalk.bold.cyan('--- Thresholds & Flags ---')}\n`;
+    const tfRows = [
+      ['Thresholds', 'Values', 'Flags', 'Status'],
+      ['Low Weight', String(audit.thresholds.low), 'Auth Required', audit.flags.authRequired ? 'YES' : 'NO'],
+      ['Medium Weight', String(audit.thresholds.med), 'Auth Revocable', audit.flags.authRevocable ? 'YES' : 'NO'],
+      ['High Weight', String(audit.thresholds.high), 'Auth Immutable', audit.flags.authImmutable ? 'YES' : 'NO'],
+      ['', '', 'Clawback Enabled', audit.flags.authClawbackEnabled ? 'YES' : 'NO'],
+    ];
+    text += formatTable(tfRows);
+
+    text += `\n${chalk.bold.cyan('--- Asset Balances ---')}\n`;
+    const balanceRows = [['Asset Code', 'Issuer', 'Balance', 'Limit']];
+    for (const bal of audit.balances) {
+      const isNative = bal.assetType === 'native';
+      const code = isNative ? 'XLM' : (bal.assetCode || 'Unknown');
+      const issuer = isNative ? 'Stellar Network' : (bal.assetIssuer?.slice(0, 10) + '...' || '-');
+      balanceRows.push([
+        code,
+        issuer,
+        isNative ? formatXlm(bal.balance) : bal.balance,
+        bal.limit || 'Unlimited',
+      ]);
+    }
+    text += formatTable(balanceRows);
+
+    text += `\n${chalk.bold.cyan('--- Signing Authorities (Multi-Sig) ---')}\n`;
+    const signerRows = [['Signer Key', 'Weight', 'Type']];
+    for (const s of audit.signers) {
+      signerRows.push([s.key, String(s.weight), s.type]);
+    }
+    text += formatTable(signerRows);
+
+    writeResult(audit, options, text);
+  });
+
+// 4. Multi-Endpoint Health Check
+program
+  .command('health <urls...>')
+  .description('Ping and compare performance across multiple Horizon servers')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (urls, options) => {
+    const spinner = ora(`Testing ${urls.length} endpoints...`).start();
+
+    const results = await Promise.all(
+      urls.map(async (url) => {
+        const info = await inspectHorizon(url);
+        return {
+          endpoint: url,
+          status: info.status,
+          latencyMs: info.latencyMs,
+          latestLedger: info.historyLatestLedger || 0,
+          protocol: info.protocolVersion || 0,
+        };
+      }),
+    );
+
+    spinner.succeed(`Tests complete.`);
+
+    let text = `\n${chalk.bold.green('=== Multi-Endpoint Performance Benchmark ===')}\n\n`;
+    const rows = [['Horizon Endpoint', 'Status', 'Latency', 'Latest Ledger', 'Protocol']];
+
+    // Find the max ledger sequence among online servers to check sync state
+    const maxLedger = Math.max(...results.map((r) => r.latestLedger));
+
+    for (const res of results) {
+      const statusStr = res.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+      const latencyStr = res.status === 'online' ? `${res.latencyMs}ms` : '-';
+      const ledgerDiff = maxLedger - res.latestLedger;
+      let ledgerStr = '-';
+
+      if (res.status === 'online') {
+        if (ledgerDiff === 0) {
+          ledgerStr = chalk.green(String(res.latestLedger));
+        } else if (ledgerDiff < 5) {
+          ledgerStr = chalk.yellow(`${res.latestLedger} (lag ${ledgerDiff})`);
+        } else {
+          ledgerStr = chalk.red(`${res.latestLedger} (lag ${ledgerDiff}!)`);
+        }
+      }
+
+      rows.push([
+        res.endpoint,
+        statusStr,
+        latencyStr,
+        ledgerStr,
+        res.status === 'online' ? String(res.protocol) : '-',
+      ]);
+    }
+
+    text += formatTable(rows);
+
+    writeResult(results, options, text);
+  });
+
+program.parse(process.argv);
