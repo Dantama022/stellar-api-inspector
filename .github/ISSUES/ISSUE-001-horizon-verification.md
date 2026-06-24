@@ -2,7 +2,7 @@
 
 **EPIC:** 1 — Core Inspection
 **Labels:** `enhancement`, `good first issue`, `epic-core-inspection`
-**Difficulty:** easy
+**Difficulty:** `easy`
 
 ## Description
 
