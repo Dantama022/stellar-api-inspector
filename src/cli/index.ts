@@ -7,9 +7,13 @@ import chalk from 'chalk';
 import { inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
 import { inspectSoroban } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
+import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
 import { formatTable, formatXlm } from '../utils/formatters';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const program = new Command();
 
@@ -232,6 +236,54 @@ program
     text += formatTable(signerRows);
 
     writeResult(audit, options, text);
+  });
+
+// 5. Transaction Submission Test
+program
+  .command('tx-test')
+  .description('Submit a test transaction and measure Horizon submission timing')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (options) => {
+    if (options.verbose) logger.setLevel('debug');
+
+    const validation = validateTxTestConfig(process.env);
+    if (!validation.valid || !validation.config) {
+      logger.error(validation.error!);
+      process.exit(1);
+    }
+
+    const spinner = ora('Running transaction submission test...').start();
+    const result = await runTxTest(validation.config);
+
+    if (!result.success) {
+      spinner.fail(`Transaction test failed: ${result.error}`);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      }
+      process.exit(1);
+    }
+
+    spinner.succeed('Transaction submitted successfully.');
+
+    let text = `\n${chalk.bold.green('=== Horizon Transaction Submission Test ===')}\n\n`;
+    text += `${chalk.cyan('Source Account:')} ${result.sourceAccount}\n`;
+    text += `${chalk.cyan('Transaction Hash:')} ${result.transactionHash}\n`;
+    text += `${chalk.cyan('Ledger:')} ${result.ledger}\n`;
+    text += `${chalk.cyan('Result:')} ${result.result}\n\n`;
+
+    const timingRows = [
+      ['Phase', 'Duration'],
+      ['Account Fetch', `${result.timings.accountFetchMs}ms`],
+      ['Transaction Build', `${result.timings.buildMs}ms`],
+      ['Submission', `${result.timings.submissionMs}ms`],
+      ['Response Processing', `${result.timings.responseProcessingMs}ms`],
+      ['Total', `${result.timings.totalMs}ms`],
+    ];
+    text += formatTable(timingRows);
+
+    writeResult(result, options, text);
   });
 
 // 4. Multi-Endpoint Health Check
