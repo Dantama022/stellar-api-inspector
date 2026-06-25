@@ -55,6 +55,16 @@ npm run dev -- account G...
 ```
 *(Optionally provide a custom Horizon URL with `-h` / `--horizon`)*
 
+### Decode Transaction XDR
+Decode a base64 TransactionEnvelope offline without network access:
+
+```bash
+npm run dev -- decode <xdrBase64>
+npm run dev -- decode <xdrBase64> --network testnet --json
+```
+
+Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
+
 ### Multi-Endpoint Health Check
 Run a latency and synchronization check on multiple Horizon endpoints:
 ```bash
