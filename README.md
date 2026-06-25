@@ -65,6 +65,16 @@ npm run dev -- decode <xdrBase64> --network testnet --json
 
 Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
 
+### Transaction Submission Test
+Measure Horizon transaction submission latency with a lightweight self-payment:
+
+```bash
+export STELLAR_SECRET_KEY=S...
+npm run dev -- tx-test
+```
+
+Requires a funded testnet account. Optionally set `HORIZON_URL` to target a different endpoint. JSON output available with `--json`.
+
 ### Multi-Endpoint Health Check
 Run a latency and synchronization check on multiple Horizon endpoints:
 ```bash
