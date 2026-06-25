@@ -64,6 +64,16 @@ npm run dev -- orderbook XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54
 
 Native XLM can be specified as `XLM`, `native`, or `XLM:native`. JSON output is available with `--json`.
 
+### Transaction Submission Test
+Measure Horizon transaction submission latency with a lightweight self-payment:
+
+```bash
+export STELLAR_SECRET_KEY=S...
+npm run dev -- tx-test
+```
+
+Requires a funded testnet account. Optionally set `HORIZON_URL` to target a different endpoint. JSON output available with `--json`.
+
 ### Multi-Endpoint Health Check
 Run a latency and synchronization check on multiple Horizon endpoints:
 ```bash
