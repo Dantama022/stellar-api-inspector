@@ -55,6 +55,15 @@ npm run dev -- account G...
 ```
 *(Optionally provide a custom Horizon URL with `-h` / `--horizon`)*
 
+### Order Book Inspection
+Query DEX order book depth, spread, and volume for a trading pair:
+
+```bash
+npm run dev -- orderbook XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54YPM7K32T6H
+```
+
+Native XLM can be specified as `XLM`, `native`, or `XLM:native`. JSON output is available with `--json`.
+
 ### Multi-Endpoint Health Check
 Run a latency and synchronization check on multiple Horizon endpoints:
 ```bash
