@@ -9,6 +9,7 @@ import { inspectSoroban } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
 import { formatTable, formatXlm } from '../utils/formatters';
 import { logger } from '../utils/logger';
+import { validateHorizonUrl } from '../utils/urls';
 
 const program = new Command();
 
@@ -52,11 +53,17 @@ program
   .action(async (url, options) => {
     if (options.verbose) logger.setLevel('debug');
 
+    const validation = validateHorizonUrl(url);
+    if (!validation.valid) {
+      logger.error(validation.error!);
+      process.exit(1);
+    }
+
     const spinner = ora(`Connecting to Horizon endpoint: ${url}`).start();
     const info = await inspectHorizon(url);
 
     if (info.status === 'offline') {
-      spinner.fail(`Horizon endpoint is offline or unreachable.`);
+      spinner.fail(`Horizon endpoint is offline or unreachable: ${url}`);
       process.exit(1);
     }
 
