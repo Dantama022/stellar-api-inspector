@@ -1,5 +1,6 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { logger } from '../utils/logger';
+import { normalizeHorizonUrl } from '../utils/urls';
 
 export interface HorizonInfo {
   url: string;
@@ -18,9 +19,10 @@ export interface HorizonInfo {
 }
 
 export async function inspectHorizon(url: string): Promise<HorizonInfo> {
+  const normalizedUrl = normalizeHorizonUrl(url);
   const start = Date.now();
   try {
-    const response = await fetch(url.endsWith('/') ? url : `${url}/`, {
+    const response = await fetch(`${normalizedUrl}/`, {
       method: 'GET',
       headers: { 'User-Agent': 'Stellar-API-Inspector/1.0' },
     });
@@ -46,7 +48,7 @@ export async function inspectHorizon(url: string): Promise<HorizonInfo> {
     const rateLimitReset = response.headers.get('x-ratelimit-reset');
 
     return {
-      url,
+      url: normalizedUrl,
       status: 'online',
       latencyMs,
       networkPassphrase: data.network_passphrase,
@@ -65,7 +67,7 @@ export async function inspectHorizon(url: string): Promise<HorizonInfo> {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug(`Horizon connection failed for ${url}: ${message}`);
     return {
-      url,
+      url: normalizedUrl,
       status: 'offline',
       latencyMs: elapsed,
     };

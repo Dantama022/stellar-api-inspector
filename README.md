@@ -37,9 +37,17 @@ npm run build
 Use the CLI driver via `npm run dev` or run the compiled output using `node dist/cli/index.js`.
 
 ### Horizon Endpoint Check
-Analyze a Horizon API endpoint's details, protocol version, and network state:
+Verify that a Horizon endpoint is reachable, measure response latency, and display network metadata (passphrase, protocol version, Horizon/Core versions):
+
 ```bash
 npm run dev -- horizon https://horizon-testnet.stellar.org
+```
+
+Example output includes response latency in milliseconds, network passphrase, protocol version, and software versions. Invalid URLs are rejected before connecting. Offline endpoints exit with code `1`.
+
+```bash
+# JSON output for scripting
+npm run dev -- horizon https://horizon-testnet.stellar.org --json
 ```
 
 ### Soroban RPC Check
@@ -63,6 +71,15 @@ npm run dev -- orderbook XLM USDC:GBBD47IF6LWK7P7MDEVSCWR7D6WV3FYVHQRFFTL6PQGP54
 ```
 
 Native XLM can be specified as `XLM`, `native`, or `XLM:native`. JSON output is available with `--json`.
+### Decode Transaction XDR
+Decode a base64 TransactionEnvelope offline without network access:
+
+```bash
+npm run dev -- decode <xdrBase64>
+npm run dev -- decode <xdrBase64> --network testnet --json
+```
+
+Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
 
 ### Transaction Submission Test
 Measure Horizon transaction submission latency with a lightweight self-payment:

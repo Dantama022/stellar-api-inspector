@@ -57,4 +57,40 @@ describe('Horizon Inspector', () => {
     expect(info.latencyMs).toBeGreaterThanOrEqual(0);
     expect(info.networkPassphrase).toBeUndefined();
   });
+
+  it('reports offline when Horizon returns HTTP error status', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: () => Promise.resolve({}),
+      headers: { get: () => null },
+    } as any);
+
+    const info = await inspectHorizon(mockUrl);
+
+    expect(info.status).toBe('offline');
+  });
+
+  it('normalizes URLs with trailing slashes', async () => {
+    const mockResponse = {
+      network_passphrase: 'Test SDF Network ; September 2015',
+      horizon_version: '2.28.0',
+      core_version: 'v19.6.0',
+      protocol_version: 19,
+    };
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+      headers: { get: () => null },
+    } as any);
+
+    const info = await inspectHorizon('https://mock-horizon.stellar.org/');
+
+    expect(info.url).toBe('https://mock-horizon.stellar.org');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://mock-horizon.stellar.org/',
+      expect.any(Object),
+    );
+  });
 });

@@ -9,9 +9,11 @@ import { inspectSoroban } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { parseAsset } from '../utils/assets';
+import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
 import { formatTable, formatXlm } from '../utils/formatters';
 import { logger } from '../utils/logger';
+import { validateHorizonUrl } from '../utils/urls';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -58,11 +60,17 @@ program
   .action(async (url, options) => {
     if (options.verbose) logger.setLevel('debug');
 
+    const validation = validateHorizonUrl(url);
+    if (!validation.valid) {
+      logger.error(validation.error!);
+      process.exit(1);
+    }
+
     const spinner = ora(`Connecting to Horizon endpoint: ${url}`).start();
     const info = await inspectHorizon(url);
 
     if (info.status === 'offline') {
-      spinner.fail(`Horizon endpoint is offline or unreachable.`);
+      spinner.fail(`Horizon endpoint is offline or unreachable: ${url}`);
       process.exit(1);
     }
 
@@ -300,6 +308,62 @@ program
     }
 
     writeResult(summary, options, text);
+// 5. XDR Transaction Decoder
+program
+  .command('decode <xdr>')
+  .description('Decode and inspect a Stellar TransactionEnvelope XDR (offline)')
+  .option('-n, --network <passphrase>', 'Network passphrase or alias (testnet, public)')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (xdr, options) => {
+    const result = decodeTransactionEnvelope(xdr, options.network);
+
+    if (!result.decoded) {
+      logger.error(result.error || 'Failed to decode transaction envelope');
+      process.exit(1);
+    }
+
+    const decoded = result.decoded;
+
+    let text = `\n${chalk.bold.green('=== Stellar Transaction Envelope ===')}\n\n`;
+    const headerRows = [
+      ['Field', 'Value'],
+      ['Type', decoded.type],
+      ['Source Account', decoded.sourceAccount],
+      ['Sequence Number', decoded.sequenceNumber],
+      ['Fee', `${decoded.fee} stroops`],
+      ['Memo', `${decoded.memo.type}${decoded.memo.value ? `: ${decoded.memo.value}` : ''}`],
+    ];
+
+    if (decoded.timeBounds) {
+      headerRows.push(['Min Time', decoded.timeBounds.minTime]);
+      headerRows.push(['Max Time', decoded.timeBounds.maxTime]);
+    }
+
+    text += formatTable(headerRows);
+
+    text += `\n${chalk.bold.cyan('--- Operations (${decoded.operations.length}) ---')}\n`;
+    for (const op of decoded.operations) {
+      text += `\n${chalk.yellow(`#${op.index + 1} ${op.type}`)}\n`;
+      const opRows = [['Property', 'Value']];
+      for (const [key, value] of Object.entries(op.details)) {
+        opRows.push([key, String(value)]);
+      }
+      text += formatTable(opRows);
+    }
+
+    text += `\n${chalk.bold.cyan('--- Signatures (${decoded.signatures.length}) ---')}\n`;
+    const sigRows = [['#', 'Hint', 'Signature (base64)']];
+    for (const sig of decoded.signatures) {
+      sigRows.push([
+        String(sig.index + 1),
+        sig.hint,
+        sig.signature.length > 32 ? sig.signature.slice(0, 32) + '...' : sig.signature,
+      ]);
+    }
+    text += formatTable(sigRows);
+
+    writeResult(decoded, options, text);
   });
 
 // 6. Transaction Submission Test
