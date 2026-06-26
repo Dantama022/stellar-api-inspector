@@ -45,8 +45,12 @@ describe('Horizon Inspector', () => {
   const mockUrl = 'https://mock-horizon.stellar.org';
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   // ── Core fields ──────────────────────────────────────────────────────────
 
@@ -178,9 +182,9 @@ describe('Horizon Inspector', () => {
   });
 
   it('handles partial headers (limit only) gracefully', async () => {
-    global.fetch = jest.fn().mockResolvedValue(
-      mockOnlineResponse(minimalBody, { 'x-ratelimit-limit': '3600' }),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(mockOnlineResponse(minimalBody, { 'x-ratelimit-limit': '3600' }));
 
     const info = await inspectHorizon(mockUrl);
 

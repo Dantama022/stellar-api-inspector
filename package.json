@@ -2,9 +2,9 @@
   "name": "stellar-api-inspector",
   "version": "1.0.0",
   "description": "🔍 A command-line inspection and health-checking tool for Stellar Horizon and Soroban RPC endpoints.",
-  "main": "dist/cli/index.js",
+  "main": "dist/src/cli/index.js",
   "bin": {
-    "stellar-api-inspector": "./dist/cli/index.js"
+    "stellar-api-inspector": "./dist/src/cli/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -37,10 +37,12 @@
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "dotenv": "^16.4.5",
+    "inquirer": "^9.3.8",
     "ora": "^5.4.1",
     "table": "^6.8.1"
   },
   "devDependencies": {
+    "@types/inquirer": "^9.0.10",
     "@types/jest": "^29.5.11",
     "@types/node": "^22.10.0",
     "@typescript-eslint/eslint-plugin": "^8.4.0",

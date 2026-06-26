@@ -12,12 +12,15 @@ import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
-import { formatTable, formatXlm } from '../utils/formatters';
+import { formatBytes, formatTable, formatXlm } from '../utils/formatters';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
+import { inspectSorobanContract } from '../services/soroban-contract';
+import { fetchOperations } from '../services/operations';
+import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -143,7 +146,7 @@ program
     if (info.rateLimit.hasRateLimitInfo || info.rateLimit.limit !== null) {
       const rl = info.rateLimit;
 
-      rows.push(['', '']);  // blank separator row
+      rows.push(['', '']); // blank separator row
       rows.push([chalk.bold('Rate Limit (Max)'), rl.limit !== null ? String(rl.limit) : 'Unknown']);
 
       // Color the remaining quota: red when low, yellow when moderately used,
@@ -230,8 +233,14 @@ program
           : chalk.yellow(String(info.health || 'UNKNOWN')),
       ],
       ['Network Passphrase', info.networkPassphrase || 'Unknown'],
-      ['Protocol Version', info.protocolVersion !== undefined ? String(info.protocolVersion) : 'Unknown'],
-      ['Latest Ledger Sequence', info.latestLedgerSequence !== undefined ? String(info.latestLedgerSequence) : 'Unknown'],
+      [
+        'Protocol Version',
+        info.protocolVersion !== undefined ? String(info.protocolVersion) : 'Unknown',
+      ],
+      [
+        'Latest Ledger Sequence',
+        info.latestLedgerSequence !== undefined ? String(info.latestLedgerSequence) : 'Unknown',
+      ],
     ];
 
     // Show close time only when available
@@ -326,6 +335,53 @@ program
       }
       text += formatTable(balanceRows);
 
+      text += `\n${chalk.bold.cyan('--- Trustline Audit ---')}\n`;
+      const trustSummary = audit.trustlineAudit.summary;
+      text += formatTable([
+        ['Metric', 'Value'],
+        ['Trustlines', String(trustSummary.totalTrustlines)],
+        [
+          'Warnings',
+          trustSummary.warningCount > 0 ? chalk.yellow(String(trustSummary.warningCount)) : '0',
+        ],
+        [
+          'Unauthorized',
+          trustSummary.unauthorizedCount > 0
+            ? chalk.red(String(trustSummary.unauthorizedCount))
+            : '0',
+        ],
+        [
+          'Revoked / Liabilities Only',
+          trustSummary.revokedCount > 0 ? chalk.red(String(trustSummary.revokedCount)) : '0',
+        ],
+        [
+          'Near Limit',
+          trustSummary.nearLimitCount > 0 ? chalk.yellow(String(trustSummary.nearLimitCount)) : '0',
+        ],
+      ]);
+
+      if (audit.trustlineAudit.trustlines.length > 0) {
+        const trustlineRows = [['Asset', 'Issuer', 'Authorized', 'Utilization', 'Warnings']];
+        for (const trustline of audit.trustlineAudit.trustlines) {
+          trustlineRows.push([
+            trustline.assetCode,
+            trustline.assetIssuer.slice(0, 10) + '...',
+            trustline.authorized ? chalk.green('YES') : chalk.red('NO'),
+            trustline.utilizationPercent === null
+              ? 'N/A'
+              : `${trustline.utilizationPercent.toFixed(2)}%`,
+            trustline.warnings.length > 0 ? chalk.yellow(String(trustline.warnings.length)) : '0',
+          ]);
+        }
+        text += formatTable(trustlineRows);
+
+        for (const trustline of audit.trustlineAudit.trustlines) {
+          for (const warning of trustline.warnings) {
+            text += chalk.yellow(`⚠ ${trustline.assetCode}: ${warning}\n`);
+          }
+        }
+      }
+
       text += `\n${chalk.bold.cyan('--- Signing Authorities (Multi-Sig) ---')}\n`;
       const signerRows = [['Signer Key', 'Weight', 'Type']];
       for (const s of audit.signers) {
@@ -338,7 +394,216 @@ program
   );
 
 // ---------------------------------------------------------------------------
-// 4. Multi-Endpoint Health Dashboard
+// 4. Soroban Contract Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('contract <contractId>')
+  .description('Inspect Soroban contract code hash, ledger footprint, and TTL metadata')
+  .option('-r, --rpc <url>', 'Soroban RPC endpoint', 'https://soroban-testnet.stellar.org')
+  .option(
+    '--ttl-warning-ledgers <count>',
+    'Warn when remaining TTL is at or below this ledger count',
+    '17280',
+  )
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      contractId: string,
+      options: {
+        rpc: string;
+        ttlWarningLedgers: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const rpcValidation = validateSorobanUrl(options.rpc);
+      if (!rpcValidation.valid) {
+        if (options.json) outputJsonError(rpcValidation.error!);
+        logger.error(rpcValidation.error!);
+        process.exit(1);
+      }
+
+      const ttlWarningLedgers = Number.parseInt(options.ttlWarningLedgers, 10);
+      if (!Number.isFinite(ttlWarningLedgers) || ttlWarningLedgers < 0) {
+        const message = '--ttl-warning-ledgers must be a non-negative integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Inspecting Soroban contract ${contractId.slice(0, 12)}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const result = await inspectSorobanContract({
+          rpcUrl: options.rpc,
+          contractId,
+          ttlWarningLedgers,
+        });
+
+        spinner.succeed('Contract inspection complete.');
+
+        let text = `\n${chalk.bold.green('=== Soroban Contract Inspection ===')}\n\n`;
+        text += formatTable([
+          ['Property', 'Value'],
+          ['Contract ID', result.contractId],
+          ['RPC URL', result.rpcUrl],
+          ['WASM Code Hash', result.wasmHash ?? 'Unknown'],
+          ['Contract Owner', result.owner ?? 'Unavailable'],
+          [
+            'Current Ledger',
+            result.currentLedger !== undefined ? String(result.currentLedger) : 'Unknown',
+          ],
+          ['Instance Found', result.instance.found ? chalk.green('YES') : chalk.red('NO')],
+          ['Code Entry Found', result.code.found ? chalk.green('YES') : chalk.yellow('NO')],
+          [
+            'WASM Size',
+            result.code.wasmSizeBytes !== undefined
+              ? formatBytes(result.code.wasmSizeBytes)
+              : 'Unknown',
+          ],
+        ]);
+
+        text += `\n${chalk.bold.cyan('--- TTL & Expiration ---')}\n`;
+        text += formatTable([
+          ['Metric', 'Value'],
+          [
+            'Current TTL / Live Until Ledger',
+            result.instance.currentTtl !== undefined
+              ? String(result.instance.currentTtl)
+              : 'Unknown',
+          ],
+          [
+            'Last Modified Ledger',
+            result.instance.lastModifiedLedger !== undefined
+              ? String(result.instance.lastModifiedLedger)
+              : 'Unknown',
+          ],
+          [
+            'Remaining Ledger Lifetime',
+            result.instance.remainingLedgers !== undefined
+              ? String(result.instance.remainingLedgers)
+              : 'Unknown',
+          ],
+          ['Warning Threshold', `${ttlWarningLedgers} ledgers`],
+        ]);
+
+        text += `\n${chalk.bold.cyan('--- Storage Footprint ---')}\n`;
+        text += formatTable([
+          ['Metric', 'Value'],
+          ['Queried Ledger Entries', String(result.storage.queriedEntryCount)],
+          ['Found Ledger Entries', String(result.storage.foundEntryCount)],
+          ['Instance Storage Entries', String(result.storage.instanceStorageEntryCount)],
+        ]);
+
+        for (const warning of result.warnings) {
+          text += chalk.yellow(`\n⚠ ${warning}`);
+        }
+        if (result.warnings.length > 0) text += '\n';
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 5. Operations History Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('operations')
+  .description('Fetch, normalize, and filter Horizon operations history')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-a, --account <accountId>', 'Filter operations by account')
+  .option('-t, --type <type>', 'Filter by operation type, e.g. payment')
+  .option('-l, --limit <count>', 'Maximum number of operations to return', '10')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (options: {
+      horizon: string;
+      account?: string;
+      type?: string;
+      limit: string;
+      json?: boolean;
+      output?: string;
+      verbose?: boolean;
+    }) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const validation = validateHorizonUrl(options.horizon);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const limit = Number.parseInt(options.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        const message = '--limit must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner('Fetching Horizon operations...', !!options.json).start();
+
+      try {
+        const result = await fetchOperations({
+          horizonUrl: options.horizon,
+          account: options.account,
+          type: options.type,
+          limit,
+        });
+
+        spinner.succeed(`Fetched ${result.operations.length} operation(s).`);
+
+        let text = `\n${chalk.bold.green('=== Horizon Operations History ===')}\n\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        if (result.account) text += `${chalk.cyan('Account:')} ${result.account}\n`;
+        if (result.type) text += `${chalk.cyan('Type Filter:')} ${result.type}\n`;
+        text += `${chalk.cyan('Limit:')} ${result.limit}\n\n`;
+
+        const rows = [['Operation ID', 'Type', 'Created At', 'Source', 'Transaction']];
+        for (const operation of result.operations) {
+          rows.push([
+            operation.id,
+            operation.type,
+            operation.createdAt,
+            operation.sourceAccount ? operation.sourceAccount.slice(0, 12) + '...' : '-',
+            operation.transactionHash ? operation.transactionHash.slice(0, 12) + '...' : '-',
+          ]);
+        }
+        text += formatTable(rows);
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 6. Multi-Endpoint Health Dashboard
 // ---------------------------------------------------------------------------
 program
   .command('health <urls...>')
@@ -407,13 +672,10 @@ program
 
     // Per-endpoint scorecard
     text += `\n${chalk.bold.cyan('--- Endpoint Scorecard ---')}\n\n`;
-    const scorecardRows = [
-      ['Endpoint', 'Status', 'Latency', 'Latest Ledger', 'Lag', 'Protocol'],
-    ];
+    const scorecardRows = [['Endpoint', 'Status', 'Latency', 'Latest Ledger', 'Lag', 'Protocol']];
 
     for (const ep of dashboard.endpoints) {
-      const statusStr =
-        ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+      const statusStr = ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
 
       const latencyStr = ep.status === 'online' ? `${ep.latencyMs}ms` : '-';
 
@@ -434,9 +696,7 @@ program
       }
 
       const protocolStr =
-        ep.status === 'online' && ep.protocolVersion !== null
-          ? String(ep.protocolVersion)
-          : '-';
+        ep.status === 'online' && ep.protocolVersion !== null ? String(ep.protocolVersion) : '-';
 
       scorecardRows.push([ep.endpoint, statusStr, latencyStr, ledgerStr, lagStr, protocolStr]);
     }
@@ -454,7 +714,7 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 5. Order Book Inspector
+// 7. Order Book Inspector
 // ---------------------------------------------------------------------------
 program
   .command('orderbook <baseAsset> <counterAsset>')
@@ -491,11 +751,7 @@ program
         !!options.json,
       ).start();
 
-      const summary = await fetchOrderBook(
-        options.horizon,
-        baseParsed.asset,
-        counterParsed.asset,
-      );
+      const summary = await fetchOrderBook(options.horizon, baseParsed.asset, counterParsed.asset);
 
       if (!summary) {
         spinner.fail('Failed to fetch order book from Horizon.');
@@ -513,10 +769,7 @@ program
         ['Metric', 'Value'],
         ['Best Bid', summary.bestBid !== null ? summary.bestBid.toFixed(7) : 'N/A'],
         ['Best Ask', summary.bestAsk !== null ? summary.bestAsk.toFixed(7) : 'N/A'],
-        [
-          'Spread',
-          summary.spreadPercent !== null ? `${summary.spreadPercent.toFixed(4)}%` : 'N/A',
-        ],
+        ['Spread', summary.spreadPercent !== null ? `${summary.spreadPercent.toFixed(4)}%` : 'N/A'],
         ['Total Bid Volume', summary.totalBidVolume.toFixed(7)],
         ['Total Ask Volume', summary.totalAskVolume.toFixed(7)],
       ];
@@ -545,7 +798,7 @@ program
   );
 
 // ---------------------------------------------------------------------------
-// 6. XDR Transaction Decoder
+// 8. XDR Transaction Decoder
 // ---------------------------------------------------------------------------
 program
   .command('decode <xdr>')
@@ -553,71 +806,63 @@ program
   .option('-n, --network <passphrase>', 'Network passphrase or alias (testnet, public)')
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
-  .action(
-    async (
-      xdr: string,
-      options: { network?: string; json?: boolean; output?: string },
-    ) => {
-      if (options.json) logger.setJsonMode(true);
+  .action(async (xdr: string, options: { network?: string; json?: boolean; output?: string }) => {
+    if (options.json) logger.setJsonMode(true);
 
-      const result = decodeTransactionEnvelope(xdr, options.network);
+    const result = decodeTransactionEnvelope(xdr, options.network);
 
-      if (!result.decoded) {
-        const msg = result.error || 'Failed to decode transaction envelope';
-        if (options.json) outputJsonError(msg);
-        logger.error(msg);
-        process.exit(1);
+    if (!result.decoded) {
+      const msg = result.error || 'Failed to decode transaction envelope';
+      if (options.json) outputJsonError(msg);
+      logger.error(msg);
+      process.exit(1);
+    }
+
+    const decoded = result.decoded;
+
+    let text = `\n${chalk.bold.green('=== Stellar Transaction Envelope ===')}\n\n`;
+    const headerRows = [
+      ['Field', 'Value'],
+      ['Type', decoded.type],
+      ['Source Account', decoded.sourceAccount],
+      ['Sequence Number', decoded.sequenceNumber],
+      ['Fee', `${decoded.fee} stroops`],
+      ['Memo', `${decoded.memo.type}${decoded.memo.value ? `: ${decoded.memo.value}` : ''}`],
+    ];
+
+    if (decoded.timeBounds) {
+      headerRows.push(['Min Time', decoded.timeBounds.minTime]);
+      headerRows.push(['Max Time', decoded.timeBounds.maxTime]);
+    }
+
+    text += formatTable(headerRows);
+
+    text += `\n${chalk.bold.cyan(`--- Operations (${decoded.operations.length}) ---`)}\n`;
+    for (const op of decoded.operations) {
+      text += `\n${chalk.yellow(`#${op.index + 1} ${op.type}`)}\n`;
+      const opRows = [['Property', 'Value']];
+      for (const [key, value] of Object.entries(op.details)) {
+        opRows.push([key, String(value)]);
       }
+      text += formatTable(opRows);
+    }
 
-      const decoded = result.decoded;
+    text += `\n${chalk.bold.cyan(`--- Signatures (${decoded.signatures.length}) ---`)}\n`;
+    const sigRows = [['#', 'Hint', 'Signature (base64)']];
+    for (const sig of decoded.signatures) {
+      sigRows.push([
+        String(sig.index + 1),
+        sig.hint,
+        sig.signature.length > 32 ? sig.signature.slice(0, 32) + '...' : sig.signature,
+      ]);
+    }
+    text += formatTable(sigRows);
 
-      let text = `\n${chalk.bold.green('=== Stellar Transaction Envelope ===')}\n\n`;
-      const headerRows = [
-        ['Field', 'Value'],
-        ['Type', decoded.type],
-        ['Source Account', decoded.sourceAccount],
-        ['Sequence Number', decoded.sequenceNumber],
-        ['Fee', `${decoded.fee} stroops`],
-        [
-          'Memo',
-          `${decoded.memo.type}${decoded.memo.value ? `: ${decoded.memo.value}` : ''}`,
-        ],
-      ];
-
-      if (decoded.timeBounds) {
-        headerRows.push(['Min Time', decoded.timeBounds.minTime]);
-        headerRows.push(['Max Time', decoded.timeBounds.maxTime]);
-      }
-
-      text += formatTable(headerRows);
-
-      text += `\n${chalk.bold.cyan(`--- Operations (${decoded.operations.length}) ---`)}\n`;
-      for (const op of decoded.operations) {
-        text += `\n${chalk.yellow(`#${op.index + 1} ${op.type}`)}\n`;
-        const opRows = [['Property', 'Value']];
-        for (const [key, value] of Object.entries(op.details)) {
-          opRows.push([key, String(value)]);
-        }
-        text += formatTable(opRows);
-      }
-
-      text += `\n${chalk.bold.cyan(`--- Signatures (${decoded.signatures.length}) ---`)}\n`;
-      const sigRows = [['#', 'Hint', 'Signature (base64)']];
-      for (const sig of decoded.signatures) {
-        sigRows.push([
-          String(sig.index + 1),
-          sig.hint,
-          sig.signature.length > 32 ? sig.signature.slice(0, 32) + '...' : sig.signature,
-        ]);
-      }
-      text += formatTable(sigRows);
-
-      writeResult(decoded, options, text);
-    },
-  );
+    writeResult(decoded, options, text);
+  });
 
 // ---------------------------------------------------------------------------
-// 7. Transaction Submission Test
+// 9. Transaction Submission Test
 // ---------------------------------------------------------------------------
 program
   .command('tx-test')
@@ -636,10 +881,7 @@ program
       process.exit(1);
     }
 
-    const spinner = makeSpinner(
-      'Running transaction submission test...',
-      !!options.json,
-    ).start();
+    const spinner = makeSpinner('Running transaction submission test...', !!options.json).start();
     const result = await runTxTest(validation.config);
 
     if (!result.success) {
@@ -671,4 +913,18 @@ program
     writeResult(result, options, text);
   });
 
-program.parse(process.argv);
+if (process.argv.length <= 2) {
+  runInteractiveMode(process.argv, async (argv) => {
+    await program.parseAsync(argv);
+  }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(message);
+    process.exit(1);
+  });
+} else {
+  program.parseAsync(process.argv).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(message);
+    process.exit(1);
+  });
+}

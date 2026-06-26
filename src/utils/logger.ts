@@ -35,34 +35,46 @@ class Logger {
   debug(msg: string): void {
     if (this.shouldLog('debug')) {
       const formatted = chalk.gray(`[DEBUG] ${msg}`);
-      this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
+      if (this.jsonMode) {
+        process.stderr.write(formatted + '\n');
+      } else {
+        process.stdout.write(formatted + '\n');
+      }
     }
   }
 
   info(msg: string): void {
     if (this.shouldLog('info')) {
       const formatted = chalk.blue(`[INFO] ${msg}`);
-      this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
+      if (this.jsonMode) {
+        process.stderr.write(formatted + '\n');
+      } else {
+        process.stdout.write(formatted + '\n');
+      }
     }
   }
 
   warn(msg: string): void {
     if (this.shouldLog('warn')) {
       const formatted = chalk.yellow(`[WARN] ${msg}`);
-      this.jsonMode ? process.stderr.write(formatted + '\n') : console.warn(formatted);
+      process.stderr.write(formatted + '\n');
     }
   }
 
   error(msg: string): void {
     if (this.shouldLog('error')) {
       const formatted = chalk.red(`[ERROR] ${msg}`);
-      this.jsonMode ? process.stderr.write(formatted + '\n') : console.error(formatted);
+      process.stderr.write(formatted + '\n');
     }
   }
 
   success(msg: string): void {
     const formatted = chalk.green(`[SUCCESS] ${msg}`);
-    this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
+    if (this.jsonMode) {
+      process.stderr.write(formatted + '\n');
+    } else {
+      process.stdout.write(formatted + '\n');
+    }
   }
 }
 

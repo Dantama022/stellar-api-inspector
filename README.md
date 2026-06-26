@@ -9,7 +9,10 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 
 - **🌐 Horizon Inspection**: Connect to any Horizon endpoint and retrieve synchronization status, fee statistics, network protocol, and ledger ranges.
 - **⚡ Soroban RPC Health**: Retrieve health details, transaction submission state, latest ledger information, and network parameters.
-- **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustlines.
+- **🧬 Soroban Contract Inspection**: Retrieve contract instance metadata, WASM code hash, ledger footprint, storage counts, and TTL expiration warnings.
+- **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustline authorization/limit risks.
+- **📜 Operations History**: Fetch Horizon operations, filter by account/type/limit, and normalize common operation details.
+- **🧭 Interactive Mode**: Launch a guided menu when the CLI is run without arguments.
 - **⏱️ Rate Limit Tracker**: Read and analyze HTTP headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`) to help avoid rate limits in production.
 - **📋 Health Dashboard**: Benchmark latency, check synchronization, and compare performance across multiple endpoints concurrently.
 - **💾 Multiple Output Formats**: Supports clean, human-readable CLI tables, raw JSON for automated scripting, or markdown exports.
@@ -35,6 +38,16 @@ npm run build
 ## Usage
 
 Use the CLI driver via `npm run dev` or run the compiled output using `node dist/cli/index.js`.
+
+### Interactive Mode
+
+Run the CLI without arguments to launch a guided prompt workflow:
+
+```bash
+npm run dev
+```
+
+The interactive menu can collect inputs for Horizon inspection, Soroban inspection, account audit, health dashboard, transaction XDR decoding, operations history, and contract inspection. Before execution it prints a command summary and asks for confirmation.
 
 ### Horizon Endpoint Check
 Verify that a Horizon endpoint is reachable, measure response latency, and display network metadata (passphrase, protocol version, Horizon/Core versions):
@@ -157,6 +170,83 @@ Audit a Stellar account's balances, subentries, thresholds, and signing weights:
 npm run dev -- account G...
 ```
 *(Optionally provide a custom Horizon URL with `-h` / `--horizon`)*
+
+Account audits include a trustline health section for non-native assets:
+
+- issuer flags: `auth_required`, `auth_revocable`, `auth_immutable`, and clawback status
+- authorization state and liabilities-only/revoked trustlines
+- balance utilization as a percentage of trustline limit
+- warnings when utilization is at or above 99%
+
+```bash
+npm run dev -- account G... --horizon https://horizon-testnet.stellar.org --json
+```
+
+### Soroban Contract Inspection
+
+Inspect contract ledger entries exposed by Soroban RPC:
+
+```bash
+npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org
+```
+
+The command queries the contract instance ledger entry, extracts the WASM code hash, queries the referenced contract code entry, calculates remaining ledger lifetime when expiration metadata is available, and reports the storage footprint it inspected.
+
+Configure TTL warning sensitivity:
+
+```bash
+npm run dev -- contract C... \
+  --rpc https://soroban-testnet.stellar.org \
+  --ttl-warning-ledgers 5000
+```
+
+Example output:
+
+```text
+=== Soroban Contract Inspection ===
+
+Contract ID:      C...
+WASM Code Hash:   0202020202020202020202020202020202020202020202020202020202020202
+Current Ledger:   100
+Instance Found:   YES
+Code Entry Found: YES
+
+--- TTL & Expiration ---
+Current TTL / Live Until Ledger: 105
+Remaining Ledger Lifetime:      5
+
+⚠ Contract TTL is below warning threshold (5 ledgers remaining; threshold 10).
+```
+
+JSON output is available:
+
+```bash
+npm run dev -- contract C... --rpc https://soroban-testnet.stellar.org --json
+```
+
+### Operations History
+
+Fetch and normalize recent Horizon operations:
+
+```bash
+npm run dev -- operations --limit 10 --type payment
+```
+
+Filter by account:
+
+```bash
+npm run dev -- operations \
+  --horizon https://horizon-testnet.stellar.org \
+  --account G... \
+  --type change_trust \
+  --limit 25
+```
+
+Supported normalized operation families include payments, create account, account merge, change trust, manage buy/sell offer, and path payment operations. Use `--json` for machine-readable output:
+
+```bash
+npm run dev -- operations --account G... --limit 10 --json
+```
 
 ### Order Book Inspection
 Query DEX order book depth, spread, and volume for a trading pair:

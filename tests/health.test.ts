@@ -27,7 +27,9 @@ function makeRaw(overrides: Partial<RawResult> & { endpoint: string }): RawResul
   };
 }
 
-function makeResult(overrides: Partial<EndpointHealthResult> & { endpoint: string }): EndpointHealthResult {
+function makeResult(
+  overrides: Partial<EndpointHealthResult> & { endpoint: string },
+): EndpointHealthResult {
   return {
     normalizedUrl: overrides.endpoint,
     status: 'online',
@@ -148,7 +150,12 @@ describe('buildHealthSummary', () => {
   it('counts online and offline correctly', () => {
     const results = [
       makeResult({ endpoint: 'https://a.com', status: 'online' }),
-      makeResult({ endpoint: 'https://b.com', status: 'offline', latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://b.com',
+        status: 'offline',
+        latestLedger: null,
+        ledgerLag: null,
+      }),
       makeResult({ endpoint: 'https://c.com', status: 'online' }),
     ];
     const summary = buildHealthSummary(results);
@@ -177,7 +184,12 @@ describe('buildHealthSummary', () => {
 
   it('returns maxLedger=null when all endpoints are offline', () => {
     const results = [
-      makeResult({ endpoint: 'https://a.com', status: 'offline', latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://a.com',
+        status: 'offline',
+        latestLedger: null,
+        ledgerLag: null,
+      }),
     ];
     const summary = buildHealthSummary(results);
     expect(summary.maxLedger).toBeNull();
@@ -209,7 +221,13 @@ describe('fastestEndpoint', () => {
 
   it('ignores offline endpoints', () => {
     const results = [
-      makeResult({ endpoint: 'https://a.com', status: 'offline', latencyMs: 0, latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://a.com',
+        status: 'offline',
+        latencyMs: 0,
+        latestLedger: null,
+        ledgerLag: null,
+      }),
       makeResult({ endpoint: 'https://b.com', latencyMs: 200 }),
     ];
     expect(fastestEndpoint(results)?.endpoint).toBe('https://b.com');
@@ -217,7 +235,12 @@ describe('fastestEndpoint', () => {
 
   it('returns null when all endpoints are offline', () => {
     const results = [
-      makeResult({ endpoint: 'https://a.com', status: 'offline', latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://a.com',
+        status: 'offline',
+        latestLedger: null,
+        ledgerLag: null,
+      }),
     ];
     expect(fastestEndpoint(results)).toBeNull();
   });
@@ -239,7 +262,12 @@ describe('mostSyncedEndpoint', () => {
 
   it('ignores offline endpoints', () => {
     const results = [
-      makeResult({ endpoint: 'https://a.com', status: 'offline', latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://a.com',
+        status: 'offline',
+        latestLedger: null,
+        ledgerLag: null,
+      }),
       makeResult({ endpoint: 'https://b.com', latestLedger: 1000 }),
     ];
     expect(mostSyncedEndpoint(results)?.endpoint).toBe('https://b.com');
@@ -247,7 +275,12 @@ describe('mostSyncedEndpoint', () => {
 
   it('returns null when all endpoints are offline', () => {
     const results = [
-      makeResult({ endpoint: 'https://a.com', status: 'offline', latestLedger: null, ledgerLag: null }),
+      makeResult({
+        endpoint: 'https://a.com',
+        status: 'offline',
+        latestLedger: null,
+        ledgerLag: null,
+      }),
     ];
     expect(mostSyncedEndpoint(results)).toBeNull();
   });

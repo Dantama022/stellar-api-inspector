@@ -1,5 +1,6 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { logger } from '../utils/logger';
+import { TrustlineAuditResult, auditTrustlines } from '../services/trustline-audit';
 
 export interface AccountAuditResult {
   accountId: string;
@@ -27,7 +28,10 @@ export interface AccountAuditResult {
     assetIssuer?: string;
     balance: string;
     limit?: string;
+    isAuthorized?: boolean;
+    isAuthorizedToMaintainLiabilities?: boolean;
   }>;
+  trustlineAudit: TrustlineAuditResult;
 }
 
 export async function auditAccount(
@@ -50,7 +54,28 @@ export async function auditAccount(
       assetIssuer: 'asset_issuer' in b ? b.asset_issuer : undefined,
       balance: b.balance,
       limit: 'limit' in b ? b.limit : undefined,
+      isAuthorized: 'is_authorized' in b ? b.is_authorized : undefined,
+      isAuthorizedToMaintainLiabilities:
+        'is_authorized_to_maintain_liabilities' in b
+          ? b.is_authorized_to_maintain_liabilities
+          : undefined,
     }));
+
+    const trustlineAudit = await auditTrustlines(
+      horizonUrl,
+      acc.balances.map((b) => ({
+        asset_type: b.asset_type,
+        asset_code: 'asset_code' in b ? b.asset_code : undefined,
+        asset_issuer: 'asset_issuer' in b ? b.asset_issuer : undefined,
+        balance: b.balance,
+        limit: 'limit' in b ? b.limit : undefined,
+        is_authorized: 'is_authorized' in b ? b.is_authorized : undefined,
+        is_authorized_to_maintain_liabilities:
+          'is_authorized_to_maintain_liabilities' in b
+            ? b.is_authorized_to_maintain_liabilities
+            : undefined,
+      })),
+    );
 
     return {
       accountId: acc.id,
@@ -69,6 +94,7 @@ export async function auditAccount(
       },
       signers,
       balances,
+      trustlineAudit,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

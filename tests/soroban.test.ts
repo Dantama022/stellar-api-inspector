@@ -7,11 +7,7 @@ import { inspectSoroban, validateSorobanUrl } from '../src/inspectors/soroban';
 /**
  * Build a mock fetch that dispatches different results per JSON-RPC method name.
  */
-function buildMethodMock(
-  handlers: Record<string, unknown>,
-  httpOk = true,
-  httpStatus = 200,
-) {
+function buildMethodMock(handlers: Record<string, unknown>, httpOk = true, httpStatus = 200) {
   return jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
     if (!httpOk) {
       return Promise.resolve({
@@ -83,14 +79,18 @@ describe('validateSorobanUrl', () => {
 describe('inspectSoroban — successful inspection', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=online and all fields when all three methods succeed', async () => {
     global.fetch = buildMethodMock({
-      getHealth:        { status: 'healthy' },
-      getNetwork:       { networkPassphrase: 'Test SDF Network ; September 2015', protocolVersion: 21 },
-      getLatestLedger:  { sequence: 999000, closedAt: 1700000000 },
+      getHealth: { status: 'healthy' },
+      getNetwork: { networkPassphrase: 'Test SDF Network ; September 2015', protocolVersion: 21 },
+      getLatestLedger: { sequence: 999000, closedAt: 1700000000 },
     });
 
     const info = await inspectSoroban('https://soroban.example.com');
@@ -106,8 +106,8 @@ describe('inspectSoroban — successful inspection', () => {
 
   it('measures latency as a non-negative number', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
-      getNetwork:      { networkPassphrase: 'Test Net', protocolVersion: 20 },
+      getHealth: { status: 'healthy' },
+      getNetwork: { networkPassphrase: 'Test Net', protocolVersion: 20 },
       getLatestLedger: { sequence: 1 },
     });
 
@@ -124,7 +124,7 @@ describe('inspectSoroban — successful inspection', () => {
 
   it('handles the alternative `passphrase` field name from getNetwork', async () => {
     global.fetch = buildMethodMock({
-      getHealth:  { status: 'healthy' },
+      getHealth: { status: 'healthy' },
       getNetwork: { passphrase: 'Public Global Stellar Network ; September 2015' },
     });
 
@@ -134,7 +134,7 @@ describe('inspectSoroban — successful inspection', () => {
 
   it('handles closeTime variant from getLatestLedger', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
+      getHealth: { status: 'healthy' },
       getLatestLedger: { sequence: 42, closeTime: 1680000000 },
     });
 
@@ -145,7 +145,7 @@ describe('inspectSoroban — successful inspection', () => {
 
   it('handles ledgerCloseTime variant from getLatestLedger', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
+      getHealth: { status: 'healthy' },
       getLatestLedger: { sequence: 42, ledgerCloseTime: 1690000000 },
     });
 
@@ -156,7 +156,7 @@ describe('inspectSoroban — successful inspection', () => {
   it('handles a millisecond timestamp in latestLedgerCloseTime without double-converting', async () => {
     const msTimestamp = 1700000000000; // already in ms
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
+      getHealth: { status: 'healthy' },
       getLatestLedger: { sequence: 42, closedAt: msTimestamp },
     });
 
@@ -174,13 +174,17 @@ describe('inspectSoroban — successful inspection', () => {
 describe('inspectSoroban — optional methods failing gracefully', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns online even when getNetwork fails', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
-      getNetwork:      new Error('Method not found'),
+      getHealth: { status: 'healthy' },
+      getNetwork: new Error('Method not found'),
       getLatestLedger: { sequence: 123 },
     });
 
@@ -192,8 +196,8 @@ describe('inspectSoroban — optional methods failing gracefully', () => {
 
   it('returns online even when getLatestLedger fails', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
-      getNetwork:      { networkPassphrase: 'Test Net', protocolVersion: 21 },
+      getHealth: { status: 'healthy' },
+      getNetwork: { networkPassphrase: 'Test Net', protocolVersion: 21 },
       getLatestLedger: new Error('Method not found'),
     });
 
@@ -205,8 +209,8 @@ describe('inspectSoroban — optional methods failing gracefully', () => {
 
   it('returns online when both optional methods fail', async () => {
     global.fetch = buildMethodMock({
-      getHealth:       { status: 'healthy' },
-      getNetwork:      new Error('Not supported'),
+      getHealth: { status: 'healthy' },
+      getNetwork: new Error('Not supported'),
       getLatestLedger: new Error('Not supported'),
     });
 
@@ -231,8 +235,12 @@ describe('inspectSoroban — optional methods failing gracefully', () => {
 describe('inspectSoroban — offline and error handling', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=offline when fetch throws a network error', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));

@@ -21,6 +21,18 @@ export interface HorizonInfo {
   rateLimit: RateLimitInfo;
 }
 
+export interface HorizonFeeStats {
+  last_ledger_base_fee: string | number;
+  ledger_capacity_usage: string;
+  fee_charged: {
+    min: string | number;
+    max: string | number;
+    p10: string | number;
+    p50: string | number;
+    p99: string | number;
+  };
+}
+
 export async function inspectHorizon(url: string): Promise<HorizonInfo> {
   const normalizedUrl = normalizeHorizonUrl(url);
   const start = Date.now();
@@ -83,11 +95,11 @@ export async function inspectHorizon(url: string): Promise<HorizonInfo> {
   }
 }
 
-export async function inspectHorizonFeeStats(url: string): Promise<unknown | null> {
+export async function inspectHorizonFeeStats(url: string): Promise<HorizonFeeStats | null> {
   try {
     const server = new Horizon.Server(url);
     const feeStats = await server.feeStats();
-    return feeStats;
+    return feeStats as HorizonFeeStats;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug(`Failed to fetch Horizon fee stats: ${message}`);
