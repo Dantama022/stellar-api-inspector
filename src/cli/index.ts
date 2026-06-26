@@ -7,6 +7,8 @@ import chalk from 'chalk';
 import { inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
 import { inspectSoroban } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
+import { fetchOrderBook } from '../inspectors/orderbook';
+import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
 import { formatTable, formatXlm } from '../utils/formatters';
@@ -239,6 +241,73 @@ program
     writeResult(audit, options, text);
   });
 
+// 5. Order Book Inspector
+program
+  .command('orderbook <baseAsset> <counterAsset>')
+  .description('Query and display DEX order book for a trading pair')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (baseAsset, counterAsset, options) => {
+    if (options.verbose) logger.setLevel('debug');
+
+    const baseParsed = parseAsset(baseAsset);
+    if (!baseParsed.asset) {
+      logger.error(baseParsed.error!);
+      process.exit(1);
+    }
+
+    const counterParsed = parseAsset(counterAsset);
+    if (!counterParsed.asset) {
+      logger.error(counterParsed.error!);
+      process.exit(1);
+    }
+
+    const spinner = ora(`Fetching order book for ${baseAsset} / ${counterAsset}...`).start();
+
+    const summary = await fetchOrderBook(options.horizon, baseParsed.asset, counterParsed.asset);
+
+    if (!summary) {
+      spinner.fail('Failed to fetch order book from Horizon.');
+      process.exit(1);
+    }
+
+    spinner.succeed('Order book retrieved.');
+
+    let text = `\n${chalk.bold.green('=== Stellar DEX Order Book ===')}\n\n`;
+    text += `${chalk.cyan('Pair:')} ${summary.baseLabel} / ${summary.counterLabel}\n`;
+    text += `${chalk.cyan('Latency:')} ${summary.latencyMs}ms\n\n`;
+
+    const metricsRows = [
+      ['Metric', 'Value'],
+      ['Best Bid', summary.bestBid !== null ? summary.bestBid.toFixed(7) : 'N/A'],
+      ['Best Ask', summary.bestAsk !== null ? summary.bestAsk.toFixed(7) : 'N/A'],
+      ['Spread', summary.spreadPercent !== null ? `${summary.spreadPercent.toFixed(4)}%` : 'N/A'],
+      ['Total Bid Volume', summary.totalBidVolume.toFixed(7)],
+      ['Total Ask Volume', summary.totalAskVolume.toFixed(7)],
+    ];
+    text += formatTable(metricsRows);
+
+    if (summary.bids.length > 0) {
+      text += `\n${chalk.bold.cyan('--- Bids ---')}\n`;
+      const bidRows = [['Price', 'Amount']];
+      for (const bid of summary.bids.slice(0, 10)) {
+        bidRows.push([bid.price, bid.amount]);
+      }
+      text += formatTable(bidRows);
+    }
+
+    if (summary.asks.length > 0) {
+      text += `\n${chalk.bold.cyan('--- Asks ---')}\n`;
+      const askRows = [['Price', 'Amount']];
+      for (const ask of summary.asks.slice(0, 10)) {
+        askRows.push([ask.price, ask.amount]);
+      }
+      text += formatTable(askRows);
+    }
+
+    writeResult(summary, options, text);
 // 5. XDR Transaction Decoder
 program
   .command('decode <xdr>')
@@ -372,7 +441,6 @@ program
     let text = `\n${chalk.bold.green('=== Multi-Endpoint Performance Benchmark ===')}\n\n`;
     const rows = [['Horizon Endpoint', 'Status', 'Latency', 'Latest Ledger', 'Protocol']];
 
-    // Find the max ledger sequence among online servers to check sync state
     const maxLedger = Math.max(...results.map((r) => r.latestLedger));
 
     for (const res of results) {
