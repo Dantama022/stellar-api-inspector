@@ -78,8 +78,7 @@ export function parseRateLimitHeaders(
     isLow = remainingPercent < RATE_LIMIT_LOW_THRESHOLD_PCT;
   }
 
-  const hasRateLimitInfo =
-    limit !== null && remaining !== null && resetSeconds !== null;
+  const hasRateLimitInfo = limit !== null && remaining !== null && resetSeconds !== null;
 
   return {
     limit,

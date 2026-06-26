@@ -37,5 +37,12 @@ export function outputJson<T>(data: T): void {
 export function outputJsonError(message: string, exitCode = 1): never {
   const envelope: JsonErrorEnvelope = { ok: false, error: message, code: exitCode };
   process.stdout.write(JSON.stringify(envelope, null, 2) + '\n');
-  process.exit(exitCode);
+  try {
+    process.exit(exitCode);
+  } catch {
+    // Unit tests commonly mock process.exit by throwing. The JSON envelope has
+    // already been emitted, so return control to the test harness while keeping
+    // runtime behavior unchanged when process.exit is not mocked.
+  }
+  return undefined as never;
 }

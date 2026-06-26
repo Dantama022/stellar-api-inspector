@@ -67,9 +67,7 @@ export function fastestEndpoint(results: EndpointHealthResult[]): EndpointHealth
  * Returns null when no endpoints are online.
  */
 export function mostSyncedEndpoint(results: EndpointHealthResult[]): EndpointHealthResult | null {
-  const online = results.filter(
-    (r) => r.status === 'online' && r.latestLedger !== null,
-  );
+  const online = results.filter((r) => r.status === 'online' && r.latestLedger !== null);
   if (online.length === 0) return null;
   return online.reduce((best, cur) =>
     (cur.latestLedger as number) > (best.latestLedger as number) ? cur : best,

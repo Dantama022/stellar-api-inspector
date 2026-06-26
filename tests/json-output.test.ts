@@ -248,9 +248,9 @@ describe('JSON envelope structure', () => {
 
   it('error envelope always has ok:false, error, and code keys', async () => {
     let out = '';
-    const exitSpy = jest
-      .spyOn(process, 'exit')
-      .mockImplementation(() => { throw new Error('exit'); });
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
     try {
       out = await captureStdout(() => outputJsonError('oops'));
     } catch {

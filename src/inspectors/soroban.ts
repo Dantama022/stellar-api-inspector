@@ -178,8 +178,7 @@ export async function inspectSoroban(url: string): Promise<SorobanInfo> {
     latestLedgerSequence = ledgerRes?.sequence;
 
     // Normalise the close-time field across different RPC implementations
-    const rawClose =
-      ledgerRes?.closedAt ?? ledgerRes?.closeTime ?? ledgerRes?.ledgerCloseTime;
+    const rawClose = ledgerRes?.closedAt ?? ledgerRes?.closeTime ?? ledgerRes?.ledgerCloseTime;
 
     if (rawClose !== undefined && rawClose !== null) {
       latestLedgerCloseTime = rawClose;
