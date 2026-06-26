@@ -1,6 +1,7 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { logger } from '../utils/logger';
 import { normalizeHorizonUrl } from '../utils/urls';
+import { RateLimitInfo, parseRateLimitHeaders } from '../utils/rate-limit';
 
 export interface HorizonInfo {
   url: string;
@@ -13,14 +14,26 @@ export interface HorizonInfo {
   historyElderLedger?: number;
   coreLatestLedger?: number;
   protocolVersion?: number;
-  rateLimitLimit?: number;
-  rateLimitRemaining?: number;
-  rateLimitReset?: number;
+  /**
+   * Parsed rate limit information from the X-Ratelimit-* response headers.
+   * All fields inside are null when the headers are absent.
+   */
+  rateLimit: RateLimitInfo;
 }
 
 export async function inspectHorizon(url: string): Promise<HorizonInfo> {
   const normalizedUrl = normalizeHorizonUrl(url);
   const start = Date.now();
+
+  // Build the default offline result — used in both the error branch and
+  // for any early return so callers always receive a complete object.
+  const offlineResult = (latencyMs: number): HorizonInfo => ({
+    url: normalizedUrl,
+    status: 'offline',
+    latencyMs,
+    rateLimit: parseRateLimitHeaders(null, null, null),
+  });
+
   try {
     const response = await fetch(`${normalizedUrl}/`, {
       method: 'GET',
@@ -43,9 +56,11 @@ export async function inspectHorizon(url: string): Promise<HorizonInfo> {
       protocol_version?: number;
     };
 
-    const rateLimitLimit = response.headers.get('x-ratelimit-limit');
-    const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
-    const rateLimitReset = response.headers.get('x-ratelimit-reset');
+    const rateLimit = parseRateLimitHeaders(
+      response.headers.get('x-ratelimit-limit'),
+      response.headers.get('x-ratelimit-remaining'),
+      response.headers.get('x-ratelimit-reset'),
+    );
 
     return {
       url: normalizedUrl,
@@ -58,23 +73,17 @@ export async function inspectHorizon(url: string): Promise<HorizonInfo> {
       historyElderLedger: data.history_elder_ledger,
       coreLatestLedger: data.core_latest_ledger,
       protocolVersion: data.protocol_version,
-      rateLimitLimit: rateLimitLimit ? parseInt(rateLimitLimit, 10) : undefined,
-      rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining, 10) : undefined,
-      rateLimitReset: rateLimitReset ? parseInt(rateLimitReset, 10) : undefined,
+      rateLimit,
     };
   } catch (err: unknown) {
     const elapsed = Date.now() - start;
     const message = err instanceof Error ? err.message : String(err);
     logger.debug(`Horizon connection failed for ${url}: ${message}`);
-    return {
-      url: normalizedUrl,
-      status: 'offline',
-      latencyMs: elapsed,
-    };
+    return offlineResult(elapsed);
   }
 }
 
-export async function inspectHorizonFeeStats(url: string): Promise<any | null> {
+export async function inspectHorizonFeeStats(url: string): Promise<unknown | null> {
   try {
     const server = new Horizon.Server(url);
     const feeStats = await server.feeStats();

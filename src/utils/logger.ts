@@ -4,9 +4,22 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 class Logger {
   private level: LogLevel = 'info';
+  private jsonMode = false;
 
   setLevel(level: LogLevel): void {
     this.level = level;
+  }
+
+  /**
+   * Enable JSON mode. When active, all log output is redirected to stderr
+   * so that stdout remains a clean JSON stream for consumers.
+   */
+  setJsonMode(enabled: boolean): void {
+    this.jsonMode = enabled;
+  }
+
+  isJsonMode(): boolean {
+    return this.jsonMode;
   }
 
   private shouldLog(msgLevel: LogLevel): boolean {
@@ -21,30 +34,35 @@ class Logger {
 
   debug(msg: string): void {
     if (this.shouldLog('debug')) {
-      console.log(chalk.gray(`[DEBUG] ${msg}`));
+      const formatted = chalk.gray(`[DEBUG] ${msg}`);
+      this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
     }
   }
 
   info(msg: string): void {
     if (this.shouldLog('info')) {
-      console.log(chalk.blue(`[INFO] ${msg}`));
+      const formatted = chalk.blue(`[INFO] ${msg}`);
+      this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
     }
   }
 
   warn(msg: string): void {
     if (this.shouldLog('warn')) {
-      console.warn(chalk.yellow(`[WARN] ${msg}`));
+      const formatted = chalk.yellow(`[WARN] ${msg}`);
+      this.jsonMode ? process.stderr.write(formatted + '\n') : console.warn(formatted);
     }
   }
 
   error(msg: string): void {
     if (this.shouldLog('error')) {
-      console.error(chalk.red(`[ERROR] ${msg}`));
+      const formatted = chalk.red(`[ERROR] ${msg}`);
+      this.jsonMode ? process.stderr.write(formatted + '\n') : console.error(formatted);
     }
   }
 
   success(msg: string): void {
-    console.log(chalk.green(`[SUCCESS] ${msg}`));
+    const formatted = chalk.green(`[SUCCESS] ${msg}`);
+    this.jsonMode ? process.stderr.write(formatted + '\n') : console.log(formatted);
   }
 }
 
