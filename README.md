@@ -45,15 +45,110 @@ npm run dev -- horizon https://horizon-testnet.stellar.org
 
 Example output includes response latency in milliseconds, network passphrase, protocol version, and software versions. Invalid URLs are rejected before connecting. Offline endpoints exit with code `1`.
 
+#### Rate Limit Headers
+
+When a Horizon server exposes rate limit headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`), they are automatically parsed and displayed in the inspection table:
+
+| Field | Description |
+|---|---|
+| Rate Limit (Max) | Total requests allowed per window |
+| Rate Limit (Remaining) | Remaining requests, shown as `count (percent%)` |
+| Rate Limit (Resets In) | Time until the window resets, formatted as `45s` or `1m 30s` |
+
+The remaining quota is color-coded for quick scanning:
+- **Green** — plenty of quota remaining (≥ 50%)
+- **Yellow** — moderately used (10–49%)
+- **Red ⚠ LOW** — below 10% — at risk of throttling
+
+Horizon deployments that do not emit these headers show no rate limit rows — there are no errors or placeholder values.
+
 ```bash
-# JSON output for scripting
+# JSON output — rate limit fields included alongside all other metadata
 npm run dev -- horizon https://horizon-testnet.stellar.org --json
 ```
 
-### Soroban RPC Check
-Verify a Soroban RPC node's health and connection details:
+**JSON output structure (rate limit fields):**
+```json
+{
+  "ok": true,
+  "data": {
+    "info": {
+      "url": "https://horizon-testnet.stellar.org",
+      "status": "online",
+      "latencyMs": 58,
+      "rateLimit": {
+        "limit": 3600,
+        "remaining": 3540,
+        "resetSeconds": 42,
+        "usedPercent": 2,
+        "remainingPercent": 98,
+        "isLow": false,
+        "hasRateLimitInfo": true
+      }
+    }
+  }
+}
+```
+
+When rate limit headers are absent, `rateLimit` fields are all `null`:
+```json
+"rateLimit": {
+  "limit": null,
+  "remaining": null,
+  "resetSeconds": null,
+  "usedPercent": null,
+  "remainingPercent": null,
+  "isLow": false,
+  "hasRateLimitInfo": false
+}
+```
+
+### Soroban RPC Inspection
+Verify a Soroban RPC node's health, network configuration, protocol version, and ledger synchronization status:
+
 ```bash
 npm run dev -- soroban https://soroban-testnet.stellar.org
+```
+
+The command runs three JSON-RPC calls concurrently to the endpoint:
+
+| Call | What it returns |
+|---|---|
+| `getHealth` | Health status (`healthy` / degraded string) |
+| `getNetwork` | Network passphrase and protocol version |
+| `getLatestLedger` | Latest ledger sequence and close timestamp |
+
+`getNetwork` and `getLatestLedger` are treated as **optional** — if the node doesn't support them the inspection still succeeds and those fields are shown as `Unknown`.
+
+Unreachable endpoints or HTTP errors exit with code `1` and display a clear error message.
+
+```bash
+# JSON output — all fields serialized, ideal for monitoring pipelines
+npm run dev -- soroban https://soroban-testnet.stellar.org --json
+
+# Save to file
+npm run dev -- soroban https://soroban-testnet.stellar.org --json --output soroban-report.json
+
+# Verbose mode (shows debug-level RPC call traces)
+npm run dev -- soroban https://soroban-testnet.stellar.org --verbose
+```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "url": "https://soroban-testnet.stellar.org",
+    "status": "online",
+    "latencyMs": 112,
+    "health": "healthy",
+    "networkPassphrase": "Test SDF Network ; September 2015",
+    "protocolVersion": 21,
+    "latestLedgerSequence": 4500000,
+    "latestLedgerCloseTime": 1700000000,
+    "latestLedgerCloseTimeIso": "2023-11-14T22:13:20.000Z"
+  }
+}
 ```
 
 ### Account Audit
@@ -91,10 +186,71 @@ npm run dev -- tx-test
 
 Requires a funded testnet account. Optionally set `HORIZON_URL` to target a different endpoint. JSON output available with `--json`.
 
-### Multi-Endpoint Health Check
-Run a latency and synchronization check on multiple Horizon endpoints:
+### Multi-Endpoint Health Dashboard
+Concurrently inspect up to 10 Horizon endpoints and generate a comparison scorecard showing availability, latency, ledger sequence, and sync lag:
+
 ```bash
 npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stellar.org
+```
+
+Example with three endpoints:
+
+```bash
+npm run dev -- health \
+  https://horizon.stellar.org \
+  https://horizon-testnet.stellar.org \
+  https://horizon-futurenet.stellar.org
+```
+
+The dashboard displays a summary banner followed by a per-endpoint scorecard:
+
+- **Status** — ONLINE / OFFLINE
+- **Latency** — round-trip time in milliseconds
+- **Latest Ledger** — the most recent ledger sequence reported by each node
+- **Lag** — how many ledgers behind the most-synced peer; endpoints lagging by more than 3 ledgers are highlighted in red with a ⚠ warning
+- **Protocol** — protocol version
+
+Endpoints are queried **concurrently**, so the total wall-clock time equals roughly the slowest single endpoint response.
+
+```bash
+# JSON output — ideal for CI pipelines, monitoring, and jq queries
+npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stellar.org --json
+
+# Parse with jq
+npm run dev -- health https://horizon.stellar.org --json | jq '.data.summary'
+npm run dev -- health https://horizon.stellar.org --json | jq '.data.endpoints[] | {endpoint, status, ledgerLag}'
+
+# Save to file
+npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stellar.org --json --output health-report.json
+```
+
+**JSON output structure:**
+```json
+{
+  "ok": true,
+  "data": {
+    "checkedAt": "2024-01-15T12:00:00.000Z",
+    "summary": {
+      "total": 2,
+      "online": 2,
+      "offline": 0,
+      "lagging": 0,
+      "maxLedger": 50000000
+    },
+    "endpoints": [
+      {
+        "endpoint": "https://horizon.stellar.org",
+        "status": "online",
+        "latencyMs": 45,
+        "latestLedger": 50000000,
+        "ledgerLag": 0,
+        "lagging": false,
+        "protocolVersion": 21,
+        "horizonVersion": "2.28.0"
+      }
+    ]
+  }
+}
 ```
 
 ### Options
