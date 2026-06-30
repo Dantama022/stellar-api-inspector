@@ -31,7 +31,21 @@ export interface AccountAuditResult {
     isAuthorized?: boolean;
     isAuthorizedToMaintainLiabilities?: boolean;
   }>;
+  dataEntries: Array<{
+    name: string;
+    value: string;
+    decodedValue: string | null;
+  }>;
   trustlineAudit: TrustlineAuditResult;
+}
+
+function decodeBase64Value(value: string): string | null {
+  try {
+    const decoded = Buffer.from(value, 'base64').toString('utf8');
+    return decoded.length > 0 || value === '' ? decoded : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function auditAccount(
@@ -77,6 +91,14 @@ export async function auditAccount(
       })),
     );
 
+    const dataEntries = Object.entries((acc as unknown as { data?: Record<string, string> }).data ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, value]) => ({
+        name,
+        value,
+        decodedValue: decodeBase64Value(value),
+      }));
+
     return {
       accountId: acc.id,
       sequence: acc.sequenceNumber(),
@@ -94,6 +116,7 @@ export async function auditAccount(
       },
       signers,
       balances,
+      dataEntries,
       trustlineAudit,
     };
   } catch (err: unknown) {

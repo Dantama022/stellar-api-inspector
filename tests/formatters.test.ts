@@ -1,4 +1,10 @@
-import { formatXlm, formatBytes, formatTable } from '../src/utils/formatters';
+import {
+  formatBytes,
+  formatFeeStatsRows,
+  formatLedgerRows,
+  formatTable,
+  formatXlm,
+} from '../src/utils/formatters';
 
 describe('Formatter Utilities', () => {
   it('correctly formats XLM amounts', () => {
@@ -21,7 +27,30 @@ describe('Formatter Utilities', () => {
     const tableString = formatTable(data);
     expect(tableString).toContain('Col1');
     expect(tableString).toContain('Val1');
-    expect(tableString).toContain('┌');
-    expect(tableString).toContain('└');
+    expect(tableString).toContain('â”Œ');
+    expect(tableString).toContain('â””');
+  });
+
+  it('formats ledger inspection rows consistently', () => {
+    const rows = formatLedgerRows({
+      sequence: 123,
+      hash: 'abc',
+      transaction_count: 4,
+      operation_count: 9,
+      closed_at: '2026-06-29T00:00:00Z',
+    });
+    expect(rows[1]).toEqual(['Sequence', '123']);
+    expect(rows[3]).toEqual(['Previous Hash', 'Unknown']);
+  });
+
+  it('formats fee statistics rows with fallbacks', () => {
+    const rows = formatFeeStatsRows({
+      last_ledger_base_fee: 100,
+      ledger_capacity_usage: '0.42',
+      fee_charged: { min: 100, max: 300, p10: 120, p50: 150, p99: 290 },
+    });
+    expect(rows[1]).toEqual(['Latest Ledger Base Fee', '100 stroops']);
+    expect(rows[5]).toEqual(['P10 Fee', '120 stroops']);
+    expect(rows[7]).toEqual(['P95 Fee', '290 stroops']);
   });
 });

@@ -4,7 +4,7 @@ import { Command } from 'commander';
 import ora from 'ora';
 import fs from 'fs';
 import chalk from 'chalk';
-import { inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
+import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
@@ -12,7 +12,7 @@ import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
-import { formatBytes, formatTable, formatXlm } from '../utils/formatters';
+import { formatBytes, formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
@@ -382,6 +382,17 @@ program
         }
       }
 
+      text += `\n${chalk.bold.cyan('--- Account Data Entries ---')}\n`;
+      if (audit.dataEntries.length === 0) {
+        text += `${chalk.gray('No account data entries found.')}\n`;
+      } else {
+        const dataRows = [['Entry', 'Decoded Value', 'Raw Value']];
+        for (const entry of audit.dataEntries) {
+          dataRows.push([entry.name, entry.decodedValue ?? '-', entry.value]);
+        }
+        text += formatTable(dataRows);
+      }
+
       text += `\n${chalk.bold.cyan('--- Signing Authorities (Multi-Sig) ---')}\n`;
       const signerRows = [['Signer Key', 'Weight', 'Type']];
       for (const s of audit.signers) {
@@ -394,7 +405,131 @@ program
   );
 
 // ---------------------------------------------------------------------------
-// 4. Soroban Contract Inspector
+// 4. Ledger Header Inspection
+// ---------------------------------------------------------------------------
+program
+  .command('ledger <sequence>')
+  .description('Inspect a specific ledger header from Horizon')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const ledgerSequence = Number.parseInt(sequence, 10);
+    if (!Number.isFinite(ledgerSequence) || ledgerSequence <= 0) {
+      const message = 'Ledger sequence must be a positive integer';
+      if (options.json) outputJsonError(message);
+      logger.error(message);
+      process.exit(1);
+    }
+
+    const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
+
+    try {
+      const result = await fetchLedger(options.horizon, ledgerSequence);
+      spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
+
+      let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
+      text += formatTable(formatLedgerRows(result.ledger));
+
+      writeResult(result, options, text);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      spinner.fail(message);
+      if (options.json) outputJsonError(message);
+      logger.error(message);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// 5. Network Fee Statistics
+// ---------------------------------------------------------------------------
+program
+  .command('fees')
+  .description('Fetch current network fee statistics from Horizon')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (options: { horizon: string; json?: boolean; output?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const spinner = makeSpinner('Fetching network fee statistics...', !!options.json).start();
+    try {
+      const stats = await inspectHorizonFeeStats(options.horizon);
+      if (!stats) {
+        spinner.fail('Failed to fetch network fee statistics from Horizon.');
+        if (options.json) outputJsonError('Failed to fetch network fee statistics from Horizon.');
+        process.exit(1);
+      }
+
+      spinner.succeed('Network fee statistics retrieved.');
+
+      let text = `\n${chalk.bold.green('=== Network Fee Statistics ===')}\n\n`;
+      text += formatTable(formatFeeStatsRows(stats));
+
+      writeResult(stats, options, text);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      spinner.fail(message);
+      if (options.json) outputJsonError(message);
+      logger.error(message);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// 6. Asset Information Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('asset <asset>')
+  .description('Inspect Stellar asset issuer, supply, trustlines, and authorization flags')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (asset: string, options: { horizon: string; json?: boolean; output?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const parsed = parseAsset(asset);
+    if (!parsed.asset || parsed.asset.type === 'native') {
+      const message = parsed.error || 'Please provide a non-native asset in CODE:ISSUER format';
+      if (options.json) outputJsonError(message);
+      logger.error(message);
+      process.exit(1);
+    }
+
+    const spinner = makeSpinner(`Fetching asset ${asset}...`, !!options.json).start();
+    const result = await fetchAsset(options.horizon, parsed.asset);
+
+    if (!result) {
+      spinner.fail(`Asset not found: ${asset}`);
+      if (options.json) outputJsonError(`Asset not found: ${asset}`);
+      process.exit(1);
+    }
+
+    spinner.succeed(`Asset ${result.label} retrieved.`);
+
+    let text = `\n${chalk.bold.green('=== Stellar Asset Inspection ===')}\n\n`;
+    const rows = [
+      ['Field', 'Value'],
+      ['Asset', result.label],
+      ['Asset Type', result.info.assetType],
+      ['Issuer', result.info.assetIssuer || 'Unknown'],
+      ['Trustlines', String(result.info.numAccounts)],
+      ['Circulating Balance', result.info.balances],
+      ['Authorization Required', result.info.authorizationRequired ? 'YES' : 'NO'],
+      ['Authorization Revocable', result.info.authorizationRevocable ? 'YES' : 'NO'],
+      ['Authorization Immutable', result.info.authorizationImmutable ? 'YES' : 'NO'],
+      ['Clawback Enabled', result.info.clawbackEnabled ? 'YES' : 'NO'],
+    ];
+    text += formatTable(rows);
+
+    writeResult(result, options, text);
+  });
+
+// ---------------------------------------------------------------------------
+// 6. Soroban Contract Inspector
 // ---------------------------------------------------------------------------
 program
   .command('contract <contractId>')
