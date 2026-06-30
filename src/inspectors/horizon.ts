@@ -2,6 +2,7 @@ import { Horizon } from '@stellar/stellar-sdk';
 import { logger } from '../utils/logger';
 import { normalizeHorizonUrl } from '../utils/urls';
 import { RateLimitInfo, parseRateLimitHeaders } from '../utils/rate-limit';
+import { ParsedAsset, assetToHorizonParams, formatAssetLabel } from '../utils/assets';
 
 export interface HorizonInfo {
   url: string;
@@ -26,11 +27,47 @@ export interface HorizonFeeStats {
   ledger_capacity_usage: string;
   fee_charged: {
     min: string | number;
+    mode?: string | number;
     max: string | number;
     p10: string | number;
     p50: string | number;
+    p95?: string | number;
     p99: string | number;
   };
+}
+
+export interface HorizonLedger {
+  id: string;
+  sequence: number;
+  hash: string;
+  prev_hash?: string;
+  transaction_count: number;
+  operation_count: number;
+  closed_at: string;
+}
+
+export interface HorizonAssetInfo {
+  assetType: string;
+  assetCode?: string;
+  assetIssuer?: string;
+  numAccounts: number;
+  balances: string;
+  authorizationRequired?: boolean;
+  authorizationRevocable?: boolean;
+  authorizationImmutable?: boolean;
+  clawbackEnabled?: boolean;
+}
+
+export interface LedgerInspectionResult {
+  ledger: HorizonLedger;
+  horizonUrl: string;
+}
+
+export interface AssetInspectionResult {
+  asset: ParsedAsset;
+  label: string;
+  horizonUrl: string;
+  info: HorizonAssetInfo;
 }
 
 export async function inspectHorizon(url: string): Promise<HorizonInfo> {
@@ -103,6 +140,74 @@ export async function inspectHorizonFeeStats(url: string): Promise<HorizonFeeSta
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     logger.debug(`Failed to fetch Horizon fee stats: ${message}`);
+    return null;
+  }
+}
+
+export async function fetchLedger(url: string, sequence: number): Promise<LedgerInspectionResult> {
+  const normalizedUrl = normalizeHorizonUrl(url);
+  const response = await fetch(`${normalizedUrl}/ledgers/${sequence}`, {
+    headers: { 'User-Agent': 'Stellar-API-Inspector/1.0' },
+  });
+  if (response.status === 404) {
+    throw new Error(`Ledger ${sequence} not found`);
+  }
+  if (!response.ok) {
+    throw new Error(`Horizon ledgers request failed: HTTP ${response.status}`);
+  }
+  const ledger = (await response.json()) as HorizonLedger;
+  return { ledger, horizonUrl: normalizedUrl };
+}
+
+export async function fetchAsset(
+  url: string,
+  asset: ParsedAsset,
+): Promise<AssetInspectionResult | null> {
+  const normalizedUrl = normalizeHorizonUrl(url);
+  const params = assetToHorizonParams(asset);
+  const query = new URL(`${normalizedUrl}/assets`);
+  for (const [key, value] of Object.entries(params)) query.searchParams.set(key, value);
+  query.searchParams.set('limit', '1');
+
+  try {
+    const response = await fetch(query.toString(), {
+      headers: { 'User-Agent': 'Stellar-API-Inspector/1.0' },
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error(`Horizon assets request failed: HTTP ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      _embedded?: { records?: Array<Record<string, unknown>> };
+    };
+    const record = data._embedded?.records?.[0];
+    if (!record) return null;
+
+    return {
+      asset,
+      label: formatAssetLabel(asset),
+      horizonUrl: normalizedUrl,
+      info: {
+        assetType: String(record.asset_type ?? params.asset_type),
+        assetCode: typeof record.asset_code === 'string' ? record.asset_code : undefined,
+        assetIssuer: typeof record.asset_issuer === 'string' ? record.asset_issuer : undefined,
+        numAccounts: Number(record.num_accounts ?? 0),
+        balances: String(record.balances ?? '0'),
+        authorizationRequired:
+          typeof record.auth_required === 'boolean' ? record.auth_required : undefined,
+        authorizationRevocable:
+          typeof record.auth_revocable === 'boolean' ? record.auth_revocable : undefined,
+        authorizationImmutable:
+          typeof record.auth_immutable === 'boolean' ? record.auth_immutable : undefined,
+        clawbackEnabled:
+          typeof record.clawback_enabled === 'boolean' ? record.clawback_enabled : undefined,
+      },
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.debug(`Failed to fetch Horizon asset info: ${message}`);
     return null;
   }
 }

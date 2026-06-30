@@ -12,6 +12,9 @@ export type InteractiveAction =
   | 'soroban'
   | 'account'
   | 'health'
+  | 'ledger'
+  | 'asset'
+  | 'fees'
   | 'decode'
   | 'operations'
   | 'contract'
@@ -69,6 +72,9 @@ export async function collectInteractiveCommand(
         { name: 'Inspect Soroban Endpoint', value: 'soroban' },
         { name: 'Audit Account', value: 'account' },
         { name: 'Multi-Endpoint Health Dashboard', value: 'health' },
+        { name: 'Inspect Ledger Header', value: 'ledger' },
+        { name: 'Inspect Asset', value: 'asset' },
+        { name: 'Network Fee Statistics', value: 'fees' },
         { name: 'Decode Transaction XDR', value: 'decode' },
         { name: 'Operations History', value: 'operations' },
         { name: 'Inspect Soroban Contract', value: 'contract' },
@@ -86,6 +92,12 @@ export async function collectInteractiveCommand(
       return collectAccountCommand(inquirer);
     case 'health':
       return collectHealthCommand(inquirer);
+    case 'ledger':
+      return collectLedgerCommand(inquirer);
+    case 'asset':
+      return collectAssetCommand(inquirer);
+    case 'fees':
+      return collectFeesCommand(inquirer);
     case 'decode':
       return collectDecodeCommand(inquirer);
     case 'operations':
@@ -295,4 +307,70 @@ function splitCsv(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+async function collectLedgerCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ sequence: string; horizon: string }>([
+    {
+      type: 'input',
+      name: 'sequence',
+      message: 'Ledger sequence',
+      validate: validatePositiveInteger,
+    },
+    {
+      type: 'input',
+      name: 'horizon',
+      message: 'Horizon endpoint URL',
+      default: 'https://horizon-testnet.stellar.org',
+      validate: validateUrl,
+    },
+  ]);
+
+  return {
+    command: 'ledger',
+    args: [answers.sequence, '--horizon', answers.horizon],
+    summary: `stellar-api-inspector ledger ${answers.sequence} --horizon ${answers.horizon}`,
+  };
+}
+
+async function collectAssetCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ asset: string; horizon: string }>([
+    {
+      type: 'input',
+      name: 'asset',
+      message: 'Asset CODE:ISSUER',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'horizon',
+      message: 'Horizon endpoint URL',
+      default: 'https://horizon-testnet.stellar.org',
+      validate: validateUrl,
+    },
+  ]);
+
+  return {
+    command: 'asset',
+    args: [answers.asset, '--horizon', answers.horizon],
+    summary: `stellar-api-inspector asset ${answers.asset} --horizon ${answers.horizon}`,
+  };
+}
+
+async function collectFeesCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ horizon: string }>([
+    {
+      type: 'input',
+      name: 'horizon',
+      message: 'Horizon endpoint URL',
+      default: 'https://horizon-testnet.stellar.org',
+      validate: validateUrl,
+    },
+  ]);
+
+  return {
+    command: 'fees',
+    args: ['--horizon', answers.horizon],
+    summary: `stellar-api-inspector fees --horizon ${answers.horizon}`,
+  };
 }
