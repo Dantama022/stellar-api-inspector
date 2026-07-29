@@ -47,23 +47,86 @@ export function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+/**
+ * Convert a base-reserve / ledger-header numeric value into a
+ * human-readable string. Horizon returns base_reserve/base_fee as
+ * either strings or numbers depending on version; normalize here.
+ * Always suffix the unit ("stroops") so the table column reads
+ * consistently whether the value is known or Unknown.
+ */
+function formatStroopValue(value: number | string | undefined | null): string {
+  if (value === undefined || value === null) return 'Unknown stroops';
+  return `${value} stroops`;
+}
+
 export function formatLedgerRows(ledger: {
   sequence: number;
   hash: string;
   prev_hash?: string;
   transaction_count: number;
   operation_count: number;
+  successful_transaction_count?: number;
   closed_at: string;
+  protocol_version?: number;
+  base_fee?: number | string;
+  base_reserve?: number | string;
+  total_coins?: string;
+  fee_pool?: string;
+  max_tx_set_size?: number;
 }): string[][] {
-  return [
+  const unknownValue = 'Unknown';
+  const rows: string[][] = [
     ['Field', 'Value'],
     ['Sequence', String(ledger.sequence)],
     ['Hash', ledger.hash],
-    ['Previous Hash', ledger.prev_hash || 'Unknown'],
+    ['Previous Hash', ledger.prev_hash || unknownValue],
     ['Transaction Count', String(ledger.transaction_count)],
+    [
+      'Successful Transaction Count',
+      ledger.successful_transaction_count !== undefined
+        ? String(ledger.successful_transaction_count)
+        : unknownValue,
+    ],
     ['Operation Count', String(ledger.operation_count)],
     ['Close Time', ledger.closed_at],
+    [
+      'Protocol Version',
+      ledger.protocol_version !== undefined ? String(ledger.protocol_version) : unknownValue,
+    ],
+    ['Base Fee', formatStroopValue(ledger.base_fee)],
+    ['Base Reserve', formatStroopValue(ledger.base_reserve)],
+    [
+      'Max Transaction Set Size',
+      ledger.max_tx_set_size !== undefined ? String(ledger.max_tx_set_size) : unknownValue,
+    ],
+    ['Total Coins', ledger.total_coins ?? unknownValue],
+    ['Fee Pool', ledger.fee_pool ?? unknownValue],
   ];
+  return rows;
+}
+
+/**
+ * Format a Horizon `_links.transactions.href` (or any templated link URL)
+ * so it can be displayed in the CLI without overwhelming the output.
+ */
+export function formatLedgerLinksRows(ledger: {
+  _links?: {
+    transactions?: { href?: string };
+    operations?: { href?: string };
+    self?: { href?: string };
+  };
+}): string[][] {
+  const rows: string[][] = [['Related Resource', 'URL']];
+  const links = ledger._links;
+
+  if (links?.self?.href) rows.push(['Self', links.self.href]);
+  if (links?.transactions?.href) rows.push(['Transactions', links.transactions.href]);
+  if (links?.operations?.href) rows.push(['Operations', links.operations.href]);
+
+  if (rows.length === 1) {
+    rows.push(['Related Resources', 'No related resources available']);
+  }
+  return rows;
 }
 
 export function formatFeeStatsRows(stats: {

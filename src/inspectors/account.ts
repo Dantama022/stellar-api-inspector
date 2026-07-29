@@ -91,7 +91,9 @@ export async function auditAccount(
       })),
     );
 
-    const dataEntries = Object.entries((acc as unknown as { data?: Record<string, string> }).data ?? {})
+    const dataEntries = Object.entries(
+      (acc as unknown as { data?: Record<string, string> }).data ?? {},
+    )
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, value]) => ({
         name,

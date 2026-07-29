@@ -43,7 +43,20 @@ export interface HorizonLedger {
   prev_hash?: string;
   transaction_count: number;
   operation_count: number;
+  /** Count of transactions confirmed by the consensus protocol in this ledger. */
+  successful_transaction_count?: number;
   closed_at: string;
+  total_coins?: string;
+  fee_pool?: string;
+  base_fee?: number | string;
+  base_reserve?: number | string;
+  max_tx_set_size?: number;
+  protocol_version?: number;
+  _links?: {
+    self?: { href?: string };
+    transactions?: { href?: string; templated?: boolean };
+    operations?: { href?: string; templated?: boolean };
+  };
 }
 
 export interface HorizonAssetInfo {
@@ -144,18 +157,35 @@ export async function inspectHorizonFeeStats(url: string): Promise<HorizonFeeSta
   }
 }
 
-export async function fetchLedger(url: string, sequence: number): Promise<LedgerInspectionResult> {
+export async function fetchLedger(
+  url: string,
+  sequence: number,
+): Promise<LedgerInspectionResult | null> {
   const normalizedUrl = normalizeHorizonUrl(url);
-  const response = await fetch(`${normalizedUrl}/ledgers/${sequence}`, {
-    headers: { 'User-Agent': 'Stellar-API-Inspector/1.0' },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${normalizedUrl}/ledgers/${sequence}`, {
+      headers: { 'User-Agent': 'Stellar-API-Inspector/1.0' },
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to reach Horizon ledgers endpoint: ${message}`);
+  }
+
   if (response.status === 404) {
-    throw new Error(`Ledger ${sequence} not found`);
+    return null;
   }
   if (!response.ok) {
     throw new Error(`Horizon ledgers request failed: HTTP ${response.status}`);
   }
   const ledger = (await response.json()) as HorizonLedger;
+  // Defensive default — Horizon normally returns 404 for unknown sequences,
+  // but some deployments return empty bodies or stringify numbers. Coerce
+  // sequence so we still recognize a valid payload even if it arrived as
+  // a numeric string.
+  if (!Number.isFinite(Number(ledger.sequence)) || typeof ledger.hash !== 'string') {
+    return null;
+  }
   return { ledger, horizonUrl: normalizedUrl };
 }
 

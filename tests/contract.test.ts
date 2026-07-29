@@ -124,4 +124,174 @@ describe('Soroban contract inspection', () => {
     expect(result.code.wasmSizeBytes).toBe(4);
     expect(result.warnings.join(' ')).toMatch(/below warning threshold/);
   });
+
+  it('rejects malformed contract IDs before touching the network', async () => {
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    await expect(
+      inspectSorobanContract({
+        rpcUrl: 'https://rpc.example',
+        contractId: 'CXXXnot-a-real-contract-id',
+      }),
+    ).rejects.toThrow(/Invalid Soroban contract ID/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty contract IDs with a useful message', async () => {
+    global.fetch = jest.fn();
+    await expect(
+      inspectSorobanContract({ rpcUrl: 'https://rpc.example', contractId: '' }),
+    ).rejects.toThrow(/Contract ID is required/);
+  });
+
+  it('propagates HTTP error responses from the RPC endpoint', async () => {
+    // Mock contract: getLatestLedger succeeds (so we exercise the
+    // getLedgerEntries error path) and getLedgerEntries returns HTTP 500.
+    // Mocking per-method decouples this test from the internal call
+    // ordering inside inspectSorobanContract.
+    global.fetch = jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === 'getLatestLedger') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ jsonrpc: '2.0', id: 1, result: { sequence: 1 } }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+      } as Response);
+    });
+
+    await expect(
+      inspectSorobanContract({
+        rpcUrl: 'https://rpc.example',
+        contractId: makeContractFixture().contractId,
+      }),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  it('propagates JSON-RPC error payloads from the RPC endpoint', async () => {
+    global.fetch = jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === 'getLatestLedger') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ jsonrpc: '2.0', id: 1, result: { sequence: 1 } }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            jsonrpc: '2.0',
+            id: 1,
+            error: { code: -32600, message: 'Invalid request' },
+          }),
+      } as Response);
+    });
+
+    await expect(
+      inspectSorobanContract({
+        rpcUrl: 'https://rpc.example',
+        contractId: makeContractFixture().contractId,
+      }),
+    ).rejects.toThrow(/JSON-RPC error -32600/);
+  });
+
+  it('handles unknown contracts gracefully and emits a warning', async () => {
+    global.fetch = jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === 'getLatestLedger') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ jsonrpc: '2.0', id: 1, result: { sequence: 200 } }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ jsonrpc: '2.0', id: 1, result: { entries: [] } }),
+      } as Response);
+    });
+
+    const result = await inspectSorobanContract({
+      rpcUrl: 'https://rpc.example',
+      contractId: makeContractFixture().contractId,
+    });
+
+    expect(result.instance.found).toBe(false);
+    expect(result.code.found).toBe(false);
+    expect(result.wasmHash).toBeUndefined();
+    expect(result.warnings.join(' ')).toMatch(/Contract instance ledger entry was not found/);
+    expect(result.storage.queriedEntryCount).toBe(1);
+    expect(result.storage.foundEntryCount).toBe(0);
+  });
+
+  it('produces an inspectable result shape suitable for the JSON output envelope', async () => {
+    const fixture = makeContractFixture();
+    let call = 0;
+    global.fetch = jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === 'getLatestLedger') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ jsonrpc: '2.0', id: 1, result: { sequence: 42 } }),
+        } as Response);
+      }
+      call += 1;
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            jsonrpc: '2.0',
+            id: 1,
+            result: {
+              entries:
+                call === 1
+                  ? [{ xdr: fixture.instanceXdr, lastModifiedLedgerSeq: 7 }]
+                  : [{ xdr: fixture.codeXdr }],
+            },
+          }),
+      } as Response);
+    });
+
+    const result = await inspectSorobanContract({
+      rpcUrl: 'https://rpc.example',
+      contractId: fixture.contractId,
+    });
+
+    // Every key surfaces in the human-readable table AND in the JSON envelope.
+    expect(result).toEqual(
+      expect.objectContaining({
+        contractId: fixture.contractId,
+        rpcUrl: 'https://rpc.example',
+        currentLedger: 42,
+        wasmHash: fixture.wasmHashHex,
+        owner: fixture.contractId,
+        instance: expect.objectContaining({ found: true }),
+        code: expect.objectContaining({ found: true, wasmSizeBytes: 4 }),
+        storage: expect.objectContaining({
+          queriedEntryCount: 2,
+          foundEntryCount: 2,
+          instanceStorageEntryCount: 1,
+        }),
+        warnings: expect.any(Array),
+      }),
+    );
+
+    // The CLI wraps this in { ok: true, data: result }. Round-trip through
+    // JSON to verify the envelope shape AND that critical result fields
+    // survive serialization intact.
+    const envelope = { ok: true as const, data: result };
+    const roundTripped = JSON.parse(JSON.stringify(envelope)) as typeof envelope;
+    expect(roundTripped.ok).toBe(true);
+    expect(roundTripped.data.contractId).toBe(fixture.contractId);
+    expect(roundTripped.data.wasmHash).toBe(fixture.wasmHashHex);
+    expect(roundTripped.data.instance.found).toBe(true);
+    expect(roundTripped.data.code.wasmSizeBytes).toBe(4);
+    expect(roundTripped.data.storage.queriedEntryCount).toBe(2);
+  });
 });
