@@ -9,6 +9,7 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 
 - **🌐 Horizon Inspection**: Connect to any Horizon endpoint and retrieve synchronization status, fee statistics, network protocol, and ledger ranges.
 - **⚡ Soroban RPC Health**: Retrieve health details, transaction submission state, latest ledger information, and network parameters.
+- **🔧 Soroban RPC Capabilities**: Inspect supported RPC methods, endpoint capabilities, and compatibility information.
 - **🔎 Soroban Transaction Inspection**: Inspect execution status, contract events, diagnostic events, resource usage, and fee breakdown for any submitted Soroban transaction.
 - **🧬 Soroban Contract Inspection**: Retrieve contract instance metadata, WASM code hash, ledger footprint, storage counts, and TTL expiration warnings.
 - **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustline authorization/limit risks.
@@ -176,6 +177,142 @@ npm run dev -- soroban https://soroban-testnet.stellar.org --verbose
     "latestLedgerCloseTimeIso": "2023-11-14T22:13:20.000Z"
   }
 }
+```
+
+### Soroban RPC Capabilities Inspection
+
+Inspect a Soroban RPC endpoint to discover supported methods, server information, and full capability details:
+
+```bash
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org
+```
+
+The command inspects the RPC endpoint and displays:
+
+- **Health Status** — Overall endpoint health (`healthy`, `degraded`, etc.)
+- **Network Information** — Network passphrase and protocol version
+- **Ledger Information** — Latest ledger sequence and close timestamp
+- **Server Information** — Server name and version (when available)
+- **Supported Methods** — Complete list of RPC methods the endpoint implements
+- **Unsupported Methods** — Methods that are not available on this endpoint
+- **Capability Summary** — Quick overview of total methods probed and support statistics
+
+```bash
+# Human-readable output
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org
+
+# JSON output — ideal for automation and compatibility checking
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org --json
+
+# Save to file
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org --output rpc-report.json
+
+# Verbose mode (shows debug traces)
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org --verbose
+```
+
+**Example human-readable output:**
+
+```text
+=== Soroban RPC Capabilities Inspection ===
+
+Property                 Value
+─────────────────────────────────────────────────────────
+Status                   ONLINE
+Response Latency         145ms
+Health Status            HEALTHY
+Network Passphrase       Test SDF Network ; September 2015
+Protocol Version         21
+Latest Ledger Sequence   4500000
+
+--- Server Information ---
+Property                 Value
+─────────────────────────────────────────────────────────
+Name                     SorobanRPC
+Version                  21.0.0
+
+--- Ledger Information ---
+Property                 Value
+─────────────────────────────────────────────────────────
+Latest Ledger Close Time 2023-11-14T22:13:20.000Z
+
+--- Supported Methods (11) ---
+Method
+──────────────────────
+getAccount
+getContractData
+getEvents
+getHealth
+getLatestLedger
+getLedgerEntries
+getNetwork
+getSendTransaction
+getServerInfo
+getTransaction
+simulateTransaction
+
+--- Capability Summary ---
+Metric                   Value
+─────────────────────────────────────────────────────────
+Total Methods Probed     12
+Supported Methods        11
+Unsupported Methods      1
+```
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "url": "https://soroban-testnet.stellar.org",
+    "status": "online",
+    "latencyMs": 145,
+    "health": "healthy",
+    "networkPassphrase": "Test SDF Network ; September 2015",
+    "protocolVersion": 21,
+    "latestLedgerSequence": 4500000,
+    "latestLedgerCloseTimeIso": "2023-11-14T22:13:20.000Z",
+    "serverInfo": {
+      "name": "SorobanRPC",
+      "version": "21.0.0"
+    },
+    "supportedMethods": [
+      "getAccount",
+      "getContractData",
+      "getEvents",
+      "getHealth",
+      "getLatestLedger",
+      "getLedgerEntries",
+      "getNetwork",
+      "sendTransaction",
+      "simulateTransaction",
+      "getTransaction"
+    ],
+    "unsupportedMethods": [
+      "getServerInfo"
+    ]
+  }
+}
+```
+
+**Use cases:**
+
+- **Pre-deployment validation** — Verify an RPC endpoint supports all methods your application needs before deploying.
+- **Endpoint compatibility checking** — Quickly compare capabilities across multiple RPC providers.
+- **Monitoring and alerting** — Track when endpoints lose support for critical methods.
+- **CI/CD integration** — Automate RPC readiness checks using JSON output and `jq` queries.
+
+Example jq query to extract supported methods:
+
+```bash
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org --json | jq '.data.supportedMethods[]'
+```
+
+Example to check if specific methods are supported:
+
+```bash
+npm run dev -- rpc-capabilities https://soroban-testnet.stellar.org --json | jq '.data | {health, supportedMethodCount: (.supportedMethods | length)}'
 ```
 
 ### Account Audit
