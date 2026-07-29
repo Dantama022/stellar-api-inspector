@@ -6,6 +6,7 @@ import fs from 'fs';
 import chalk from 'chalk';
 import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
+import { inspectRpcCapabilities, validateRpcUrl } from '../inspectors/rpc-capabilities';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
@@ -20,6 +21,7 @@ import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
 import { fetchOperations } from '../services/operations';
+import { inspectNetworkPassphrase } from '../services/network-validator';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
@@ -251,6 +253,118 @@ program
     }
 
     text += formatTable(rows);
+
+    writeResult(info, options, text);
+  });
+
+// ---------------------------------------------------------------------------
+// 2b. Soroban RPC Capabilities Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('rpc-capabilities <url>')
+  .description('Inspect Soroban RPC endpoint capabilities, supported methods, and network info')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(async (url: string, options: { json?: boolean; output?: string; verbose?: boolean }) => {
+    if (options.verbose) logger.setLevel('debug');
+    if (options.json) logger.setJsonMode(true);
+
+    // Validate URL before touching the network
+    const validation = validateRpcUrl(url);
+    if (!validation.valid) {
+      if (options.json) outputJsonError(validation.error!);
+      logger.error(validation.error!);
+      process.exit(1);
+    }
+
+    const spinner = makeSpinner(`Inspecting RPC capabilities: ${url}`, !!options.json).start();
+    const info = await inspectRpcCapabilities(url);
+
+    if (info.status === 'offline') {
+      const reason = info.error ? `: ${info.error}` : '';
+      spinner.fail(`RPC endpoint is offline or unreachable${reason}`);
+      if (options.json)
+        outputJsonError(`RPC endpoint is offline or unreachable: ${url}${reason}`);
+      process.exit(1);
+    }
+
+    spinner.succeed(`RPC capabilities inspection complete.`);
+
+    let text = `\n${chalk.bold.green('=== Soroban RPC Capabilities Inspection ===')}\n\n`;
+    const rows: string[][] = [
+      ['Property', 'Value'],
+      ['Status', chalk.green(info.status.toUpperCase())],
+      ['Response Latency', `${info.latencyMs}ms`],
+      [
+        'Health Status',
+        info.health === 'healthy'
+          ? chalk.green('HEALTHY')
+          : chalk.yellow(String(info.health || 'UNKNOWN')),
+      ],
+      ['Network Passphrase', info.networkPassphrase || 'Unknown'],
+      [
+        'Protocol Version',
+        info.protocolVersion !== undefined ? String(info.protocolVersion) : 'Unknown',
+      ],
+      [
+        'Latest Ledger Sequence',
+        info.latestLedgerSequence !== undefined ? String(info.latestLedgerSequence) : 'Unknown',
+      ],
+    ];
+
+    // Show server info if available
+    if (info.serverInfo) {
+      text += formatTable(rows);
+      text += `\n${chalk.bold.cyan('--- Server Information ---')}\n`;
+      const serverRows = [['Property', 'Value']];
+      if (info.serverInfo.name) serverRows.push(['Name', info.serverInfo.name]);
+      if (info.serverInfo.version) serverRows.push(['Version', info.serverInfo.version]);
+      text += formatTable(serverRows);
+    } else {
+      text += formatTable(rows);
+    }
+
+    // Show close time only when available
+    if (info.latestLedgerCloseTimeIso) {
+      text += `\n${chalk.bold.cyan('--- Ledger Information ---')}\n`;
+      text += formatTable([
+        ['Property', 'Value'],
+        ['Latest Ledger Close Time', info.latestLedgerCloseTimeIso],
+      ]);
+    }
+
+    // Show supported methods
+    if (info.supportedMethods && info.supportedMethods.length > 0) {
+      text += `\n${chalk.bold.cyan(`--- Supported Methods (${info.supportedMethods.length}) ---`)}\n`;
+      const methodRows = [['Method']];
+      for (const method of info.supportedMethods.sort()) {
+        methodRows.push([chalk.green(method)]);
+      }
+      text += formatTable(methodRows);
+    }
+
+    // Show unsupported methods
+    if (info.unsupportedMethods && info.unsupportedMethods.length > 0) {
+      text += `\n${chalk.bold.cyan(`--- Unsupported Methods (${info.unsupportedMethods.length}) ---`)}\n`;
+      const methodRows = [['Method']];
+      for (const method of info.unsupportedMethods.sort()) {
+        methodRows.push([chalk.gray(method)]);
+      }
+      text += formatTable(methodRows);
+    }
+
+    // Capabilities summary
+    if (info.supportedMethods) {
+      text += `\n${chalk.bold.cyan('--- Capability Summary ---')}\n`;
+      const summaryRows = [
+        ['Metric', 'Value'],
+        ['Total Methods Probed', String((info.supportedMethods.length || 0) + (info.unsupportedMethods?.length || 0))],
+        ['Supported Methods', chalk.green(String(info.supportedMethods.length || 0))],
+        ['Unsupported Methods', chalk.yellow(String(info.unsupportedMethods?.length || 0))],
+      ];
+      text += formatTable(summaryRows);
+    }
 
     writeResult(info, options, text);
   });
