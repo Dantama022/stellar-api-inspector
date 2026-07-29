@@ -5,8 +5,16 @@ import ora from 'ora';
 import fs from 'fs';
 import chalk from 'chalk';
 import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
+import { inspectAccountFlags } from '../inspectors/flags';
+import {
+  fetchAsset,
+  fetchLedger,
+  inspectHorizon,
+  inspectHorizonFeeStats,
+} from '../inspectors/horizon';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
 import { inspectRpcCapabilities, validateRpcUrl } from '../inspectors/rpc-capabilities';
+import { formatContractInspectionReport } from '../output/contract-report';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
@@ -14,14 +22,28 @@ import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
 import { formatBytes, formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
+import { analyzeLedgerRange } from '../services/ledger-analyzer';
+import {
+  formatBytes,
+  formatFeeStatsRows,
+  formatLedgerLinksRows,
+  formatLedgerRows,
+  formatTable,
+  formatXlm,
+} from '../utils/formatters';
+import { formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
+import { inspectNetworkPassphrase } from '../services/network-validator';
 import { fetchOperations } from '../services/operations';
 import { inspectNetworkPassphrase } from '../services/network-validator';
+import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
+import { fetchTrades } from '../services/trades';
+import { compareEndpoints } from '../services/endpoint-inspector';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
@@ -523,39 +545,98 @@ program
 // ---------------------------------------------------------------------------
 program
   .command('ledger <sequence>')
-  .description('Inspect a specific ledger header from Horizon')
+  .description('Inspect a specific Stellar ledger header, metadata, and activity summary')
   .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option(
+    '--show-links',
+    'Display Horizon-provided links to related transactions/operations for this ledger',
+  )
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
-  .action(async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
-    if (options.json) logger.setJsonMode(true);
+  .action(
+    async (
+      sequence: string,
+      options: { horizon: string; showLinks?: boolean; json?: boolean; output?: string },
+    ) => {
+    async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
+      if (options.json) logger.setJsonMode(true);
 
-    const ledgerSequence = Number.parseInt(sequence, 10);
-    if (!Number.isFinite(ledgerSequence) || ledgerSequence <= 0) {
-      const message = 'Ledger sequence must be a positive integer';
-      if (options.json) outputJsonError(message);
-      logger.error(message);
-      process.exit(1);
-    }
+      const ledgerSequence = Number.parseInt(sequence, 10);
+      if (!Number.isFinite(ledgerSequence) || ledgerSequence <= 0) {
+        const message = 'Ledger sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
 
-    const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
+      const spinner = makeSpinner(
+        `Fetching ledger ${ledgerSequence} from ${options.horizon}...`,
+        !!options.json,
+      ).start();
 
-    try {
-      const result = await fetchLedger(options.horizon, ledgerSequence);
+      let result;
+      try {
+        result = await fetchLedger(options.horizon, ledgerSequence);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (options.json) {
+          // outputJsonError writes the envelope AND terminates. Skip the
+          // trailing spinner/logger/process.exit so we don't produce
+          // duplicate stderr/stdout under both real and mocked execution.
+          outputJsonError(message);
+          return;
+        }
+        spinner.fail(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (!result) {
+        const message = `Ledger ${ledgerSequence} not found on Horizon endpoint ${options.horizon}.`;
+        if (options.json) {
+          outputJsonError(message);
+          return;
+        }
+        spinner.fail(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
       spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
 
       let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
+      text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+      text += `${chalk.cyan('Sequence:')} ${result.ledger.sequence}\n\n`;
       text += formatTable(formatLedgerRows(result.ledger));
 
+      // Surface Horizon-provided links to related resources when the user
+      // opts in via --show-links. The links come directly from the ledger
+      // payload's _links block (no extra network call required).
+      if (options.showLinks) {
+        text += `\n${chalk.bold.cyan('--- Related Resources ---')}\n`;
+        text += formatTable(formatLedgerLinksRows(result.ledger));
+      }
+
       writeResult(result, options, text);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      spinner.fail(message);
-      if (options.json) outputJsonError(message);
-      logger.error(message);
-      process.exit(1);
-    }
-  });
+      const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
+
+      try {
+        const result = await fetchLedger(options.horizon, ledgerSequence);
+        spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
+
+        let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
+        text += formatTable(formatLedgerRows(result.ledger));
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
 
 // ---------------------------------------------------------------------------
 // 5. Network Fee Statistics
@@ -692,71 +773,26 @@ program
       ).start();
 
       try {
-        const result = await inspectSorobanContract({
-          rpcUrl: options.rpc,
-          contractId,
-          ttlWarningLedgers,
-        });
+        // Fetch contract data + RPC network info concurrently so the total
+        // Fetch contract data + RPC network info concurrently so the total
+        // wait is bounded by the slowest JSON-RPC call, not their sum.
+        // inspectSoroban() is fault-tolerant and always RESOLVES (with
+        // status: 'offline' on failure), so a single contract-side rejection
+        // is correctly propagated to the try/catch above.
+        const [result, networkInfo] = await Promise.all([
+          inspectSorobanContract({
+            rpcUrl: options.rpc,
+            contractId,
+            ttlWarningLedgers,
+          }),
+          inspectSoroban(options.rpc),
+        ]);
 
         spinner.succeed('Contract inspection complete.');
 
-        let text = `\n${chalk.bold.green('=== Soroban Contract Inspection ===')}\n\n`;
-        text += formatTable([
-          ['Property', 'Value'],
-          ['Contract ID', result.contractId],
-          ['RPC URL', result.rpcUrl],
-          ['WASM Code Hash', result.wasmHash ?? 'Unknown'],
-          ['Contract Owner', result.owner ?? 'Unavailable'],
-          [
-            'Current Ledger',
-            result.currentLedger !== undefined ? String(result.currentLedger) : 'Unknown',
-          ],
-          ['Instance Found', result.instance.found ? chalk.green('YES') : chalk.red('NO')],
-          ['Code Entry Found', result.code.found ? chalk.green('YES') : chalk.yellow('NO')],
-          [
-            'WASM Size',
-            result.code.wasmSizeBytes !== undefined
-              ? formatBytes(result.code.wasmSizeBytes)
-              : 'Unknown',
-          ],
-        ]);
-
-        text += `\n${chalk.bold.cyan('--- TTL & Expiration ---')}\n`;
-        text += formatTable([
-          ['Metric', 'Value'],
-          [
-            'Current TTL / Live Until Ledger',
-            result.instance.currentTtl !== undefined
-              ? String(result.instance.currentTtl)
-              : 'Unknown',
-          ],
-          [
-            'Last Modified Ledger',
-            result.instance.lastModifiedLedger !== undefined
-              ? String(result.instance.lastModifiedLedger)
-              : 'Unknown',
-          ],
-          [
-            'Remaining Ledger Lifetime',
-            result.instance.remainingLedgers !== undefined
-              ? String(result.instance.remainingLedgers)
-              : 'Unknown',
-          ],
-          ['Warning Threshold', `${ttlWarningLedgers} ledgers`],
-        ]);
-
-        text += `\n${chalk.bold.cyan('--- Storage Footprint ---')}\n`;
-        text += formatTable([
-          ['Metric', 'Value'],
-          ['Queried Ledger Entries', String(result.storage.queriedEntryCount)],
-          ['Found Ledger Entries', String(result.storage.foundEntryCount)],
-          ['Instance Storage Entries', String(result.storage.instanceStorageEntryCount)],
-        ]);
-
-        for (const warning of result.warnings) {
-          text += chalk.yellow(`\n⚠ ${warning}`);
-        }
-        if (result.warnings.length > 0) text += '\n';
+        const text = formatContractInspectionReport(result, networkInfo, {
+          ttlWarningLedgers,
+        });
 
         writeResult(result, options, text);
       } catch (err: unknown) {
@@ -963,7 +999,148 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 7. Order Book Inspector
+// 7. Multi-Endpoint Compatibility Comparison
+// ---------------------------------------------------------------------------
+program
+  .command('compare-endpoints <urls...>')
+  .description('Compare configuration, compatibility, and health across multiple Stellar endpoints')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-t, --timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .action(
+    async (
+      urls: string[],
+      options: { json?: boolean; output?: string; timeout?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (urls.length === 0) {
+        const message = 'At least one endpoint URL is required';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const timeout = Number.parseInt(options.timeout ?? '10000', 10);
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        const message = '--timeout must be a positive integer (milliseconds)';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Comparing ${urls.length} endpoint${urls.length === 1 ? '' : 's'}...`,
+        !!options.json,
+      ).start();
+
+      const result = await compareEndpoints(urls, { timeout });
+
+      const onlineCount = result.endpoints.filter((e) => e.status === 'online').length;
+
+      // Always show spinner status — even when some endpoints fail
+      if (onlineCount === result.endpoints.length) {
+        spinner.succeed('All endpoints responded successfully.');
+      } else if (onlineCount === 0) {
+        spinner.fail('All endpoints are offline or unreachable.');
+        if (options.json) outputJsonError('All endpoints are offline or unreachable.');
+        process.exit(1);
+      } else {
+        spinner.succeed(
+          `${onlineCount}/${result.endpoints.length} endpoints online, ` +
+            `${result.endpoints.length - onlineCount} offline.`,
+        );
+      }
+
+      // Build human-readable text
+      let text = `\n${chalk.bold.green('=== Multi-Endpoint Compatibility Comparison ===')}\n`;
+      text += `${chalk.gray(`Checked at: ${result.checkedAt}`)}\n`;
+      text += `${chalk.gray(`Timeout: ${timeout}ms`)}\n\n`;
+
+      // Comparison table
+      const headerRow = [
+        'Endpoint URL',
+        'Type',
+        'Status',
+        'Latency',
+        'Network Passphrase',
+        'Protocol',
+        'Latest Ledger',
+        'Health',
+      ];
+      const tableRows: string[][] = [headerRow];
+
+      for (const ep of result.endpoints) {
+        const typeStr =
+          ep.type === 'horizon'
+            ? chalk.blue('Horizon')
+            : ep.type === 'soroban-rpc'
+              ? chalk.magenta('Soroban RPC')
+              : chalk.gray('Unknown');
+
+        const statusStr =
+          ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+
+        const latencyStr = ep.status === 'online' ? `${ep.latencyMs}ms` : '-';
+
+        const networkStr =
+          ep.networkPassphrase ?? (ep.status === 'offline' ? chalk.gray('-') : 'Unknown');
+
+        const protocolStr =
+          ep.protocolVersion !== undefined
+            ? String(ep.protocolVersion)
+            : ep.status === 'offline'
+              ? chalk.gray('-')
+              : 'Unknown';
+
+        const ledgerStr =
+          ep.latestLedger !== undefined
+            ? String(ep.latestLedger)
+            : ep.status === 'offline'
+              ? chalk.gray('-')
+              : 'Unknown';
+
+        const healthStr = ep.status === 'online' ? chalk.green(ep.healthStatus ?? 'OK') : ep.error ?? '-';
+
+        tableRows.push([
+          ep.url,
+          typeStr,
+          statusStr,
+          latencyStr,
+          networkStr,
+          protocolStr,
+          ledgerStr,
+          healthStr,
+        ]);
+      }
+
+      text += formatTable(tableRows);
+
+      // Differences / warnings section
+      if (result.differences.networkMismatch) {
+        text += chalk.red(`\n⚠ NETWORK MISMATCH: Endpoints are on different Stellar networks!\n`);
+      }
+      if (result.differences.protocolMismatch) {
+        text += chalk.yellow(
+          `\n⚠ PROTOCOL VERSION MISMATCH: Endpoints are running different protocol versions.\n`,
+        );
+      }
+      if (result.differences.hasOfflineEndpoints) {
+        text += chalk.yellow(
+          `\n⚠ ${result.endpoints.filter((e) => e.status === 'offline').length} endpoint(s) are offline or unreachable.\n`,
+        );
+      }
+
+      if (!result.differences.networkMismatch && !result.differences.protocolMismatch && !result.differences.hasOfflineEndpoints) {
+        text += chalk.green(`\n✓ All endpoints are compatible — no configuration differences detected.\n`);
+      }
+
+      writeResult(result, options, text);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 8. Order Book Inspector
 // ---------------------------------------------------------------------------
 program
   .command('orderbook <baseAsset> <counterAsset>')
@@ -1111,7 +1288,102 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 9. Network Passphrase Inspection
+// ---------------------------------------------------------------------------
+// 9. Account Flags Inspector
+// ---------------------------------------------------------------------------
+program
+  .command("flags <accountId>")
+  .description("Inspect Stellar account authorization flags with explanations")
+  .option("-h, --horizon <url>", "Horizon server endpoint", "https://horizon-testnet.stellar.org")
+  .option("-j, --json", "Output raw JSON (machine-readable, suppresses colors and spinners)")
+  .option("-o, --output <path>", "Save output to file")
+  .action(
+    async (
+      accountId: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (!accountId.startsWith("G") || accountId.length !== 56) {
+        const message = "Invalid Stellar account ID. Must be a 56-character string starting with G.";
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching flags for account ${accountId.slice(0, 8)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await inspectAccountFlags(options.horizon, accountId);
+
+      if (!result) {
+        spinner.fail("Failed to load account from Horizon. Ensure the address is valid.");
+        if (options.json) outputJsonError("Account not found or Horizon unreachable");
+        process.exit(1);
+      }
+
+      spinner.succeed("Account flags retrieved.");
+
+      let text = `
+${chalk.bold.green('=== Stellar Account Flags ===')}
+`;
+      text += `${chalk.cyan('Account ID:')} ${result.accountId}
+`;
+      text += `${chalk.cyan('Sequence:')}   ${result.sequence}
+`;
+      text += `${chalk.cyan('Subentries:')} ${result.subentryCount}
+`;
+
+      if (result.homeDomain) {
+        text += `${chalk.cyan('Home Domain:')} ${result.homeDomain}
+`;
+      }
+      if (result.inflationDestination) {
+        text += `${chalk.cyan('Inflation Dest:')} ${result.inflationDestination}
+`;
+      }
+
+      text += `
+${chalk.bold.cyan('--- Authorization Flags ---')}
+`;
+      const flagRows = [["Flag", "Status", "Purpose"]];
+      for (const exp of result.explanations) {
+        const status = exp.enabled ? chalk.green("ENABLED") : chalk.red("DISABLED");
+        flagRows.push([exp.flag, status, exp.purpose]);
+      }
+      text += formatTable(flagRows);
+
+      text += `
+${chalk.bold.cyan('--- Flag Explanations ---')}
+`;
+      for (const exp of result.explanations) {
+        const status = exp.enabled ? chalk.green("ON") : chalk.red("OFF");
+        text += `
+${chalk.yellow(exp.flag)} [${status}]`;
+        text += `  ${exp.description}
+`;
+      }
+
+      if (result.warnings.length > 0) {
+        text += `
+${chalk.bold.yellow('--- Configuration Warnings ---')}
+`;
+        for (const w of result.warnings) {
+          const prefix = w.severity === 'critical' ? chalk.red('!!') : w.severity === 'warning' ? chalk.yellow('!') : chalk.cyan('i');
+          text += `${prefix} ${w.message}
+`;
+        }
+      }
+
+      writeResult(result, options, text);
+    },
+  );
+
+
+// ---------------------------------------------------------------------------
+// 10. Network Passphrase Inspection
 // ---------------------------------------------------------------------------
 program
   .command('network')
@@ -1196,6 +1468,403 @@ program
 
     writeResult(result, options, text);
   });
+
+// ---------------------------------------------------------------------------
+// 11. Ledger Range Analysis
+// ---------------------------------------------------------------------------
+program
+  .command('ledgers <startSequence> <endSequence>')
+  .description('Analyze a range of Stellar ledgers and display aggregate statistics')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('--max-range <count>', 'Maximum ledger range size', '200')
+// 11. Market Trade History
+// ---------------------------------------------------------------------------
+program
+  .command('trades <baseAsset> <counterAsset>')
+  .description('Fetch and summarize recent trade history for a Stellar asset pair')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-l, --limit <count>', 'Maximum number of trades to return', '20')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      startSequence: string,
+      endSequence: string,
+      options: {
+        horizon: string;
+        maxRange: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+      baseAsset: string,
+      counterAsset: string,
+      options: { horizon: string; limit: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const startSeq = Number.parseInt(startSequence, 10);
+      const endSeq = Number.parseInt(endSequence, 10);
+
+      if (!Number.isFinite(startSeq) || startSeq <= 0) {
+        const message = 'Start sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (!Number.isFinite(endSeq) || endSeq <= 0) {
+        const message = 'End sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (endSeq < startSeq) {
+        const message = 'End sequence must be greater than or equal to start sequence';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const maxRange = Number.parseInt(options.maxRange, 10);
+      if (!Number.isFinite(maxRange) || maxRange <= 0) {
+        const message = '--max-range must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+      const validation = validateHorizonUrl(options.horizon);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const baseParsed = parseAsset(baseAsset);
+      if (!baseParsed.asset) {
+        const msg = baseParsed.error!;
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const counterParsed = parseAsset(counterAsset);
+      if (!counterParsed.asset) {
+        const msg = counterParsed.error!;
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const limit = Number.parseInt(options.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        const msg = '--limit must be a positive integer';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Analyzing ledgers ${startSeq} to ${endSeq}...`,
+        `Fetching trades for ${baseAsset} / ${counterAsset}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const result = await analyzeLedgerRange({
+          horizonUrl: options.horizon,
+          startSequence: startSeq,
+          endSequence: endSeq,
+          maxRange,
+        });
+
+        spinner.succeed(
+          `Analysis complete — ${result.summary.totalLedgers} ledgers, ${result.summary.totalTransactions} transactions, ${result.highActivityLedgers.length} high-activity ledgers.`,
+        );
+
+        let text = `\n${chalk.bold.green('=== Ledger Range Analysis ===')}\n\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        text += `${chalk.cyan('Range:')} ${result.range.start} → ${result.range.end}\n\n`;
+
+        text += `${chalk.bold.cyan('--- Aggregate Statistics ---')}\n`;
+        const statsRows: string[][] = [
+          ['Metric', 'Value'],
+          ['Total Ledgers Analyzed', String(result.summary.totalLedgers)],
+          ['Total Transactions', String(result.summary.totalTransactions)],
+          ['Total Operations', String(result.summary.totalOperations)],
+          ['Avg Transactions / Ledger', String(result.summary.avgTransactionsPerLedger)],
+          ['Avg Operations / Ledger', String(result.summary.avgOperationsPerLedger)],
+          ['Avg Close Interval', `${result.summary.avgLedgerCloseIntervalSeconds}s`],
+        ];
+
+        if (result.summary.missingLedgers > 0) {
+          statsRows.push([
+            'Missing Ledgers',
+            chalk.yellow(String(result.summary.missingLedgers)),
+          ]);
+        }
+
+        text += formatTable(statsRows);
+
+        if (result.highActivityLedgers.length > 0) {
+          text += `\n${chalk.bold.yellow('--- High-Activity Ledgers ---')}\n`;
+          text += chalk.gray('(transaction count exceeds threshold of mean + 2σ)\n\n');
+          const highRows: string[][] = [
+            ['Sequence', 'Transactions', 'Operations', 'Threshold'],
+          ];
+          for (const hl of result.highActivityLedgers) {
+            highRows.push([
+              String(hl.sequence),
+              String(hl.transactionCount),
+              String(hl.operationCount),
+              String(hl.threshold),
+            ]);
+          }
+          text += formatTable(highRows);
+        }
+
+        if (result.summary.missingSequences.length > 0) {
+          text += `\n${chalk.yellow('--- Missing Ledgers ---')}\n`;
+          const missingDisplay =
+            result.summary.missingSequences.length <= 20
+              ? result.summary.missingSequences.join(', ')
+              : `${result.summary.missingSequences.slice(0, 20).join(', ')} ... and ${result.summary.missingSequences.length - 20} more`;
+          text += chalk.yellow(
+            `⚠ ${result.summary.missingLedgers} ledger(s) not found: ${missingDisplay}\n`,
+          );
+        const result = await fetchTrades({
+          horizonUrl: options.horizon,
+          baseAsset: baseParsed.asset,
+          counterAsset: counterParsed.asset,
+          limit,
+        });
+
+        spinner.succeed(`Fetched ${result.trades.length} trade(s).`);
+
+        // ── Human-readable output ───────────────────────────────────────────
+        let text = `\n${chalk.bold.green('=== Market Trade History ===')}\n\n`;
+        text += `${chalk.cyan('Pair:')}    ${result.baseLabel} / ${result.counterLabel}\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        text += `${chalk.cyan('Latency:')} ${result.latencyMs}ms\n\n`;
+
+        if (result.trades.length === 0) {
+          text += chalk.yellow('No recent trades found for this asset pair.\n');
+        } else {
+          // Trade rows
+          const tradeRows = [
+            ['Trade ID', 'Timestamp', 'Base Asset', 'Counter Asset', 'Price', 'Base Amount', 'Counter Amount'],
+          ];
+          for (const trade of result.trades) {
+            tradeRows.push([
+              trade.id.slice(0, 16) + '...',
+              trade.ledgerCloseTime,
+              trade.baseAsset,
+              trade.counterAsset,
+              trade.price.toFixed(7),
+              parseFloat(trade.baseAmount).toFixed(7),
+              parseFloat(trade.counterAmount).toFixed(7),
+            ]);
+          }
+          text += formatTable(tradeRows);
+
+          // Summary statistics
+          const s = result.stats;
+          text += `\n${chalk.bold.cyan('--- Summary Statistics ---')}\n`;
+          const statsRows = [
+            ['Metric', 'Value'],
+            ['Number of Trades', String(s.tradeCount)],
+            ['Total Base Volume', s.totalBaseVolume.toFixed(7)],
+            ['Total Counter Volume', s.totalCounterVolume.toFixed(7)],
+            ['Average Price', s.averagePrice !== null ? s.averagePrice.toFixed(7) : 'N/A'],
+            ['Highest Price', s.highestPrice !== null ? s.highestPrice.toFixed(7) : 'N/A'],
+            ['Lowest Price', s.lowestPrice !== null ? s.lowestPrice.toFixed(7) : 'N/A'],
+          ];
+          text += formatTable(statsRows);
+        }
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 12. Soroban Transaction Inspector
+// ---------------------------------------------------------------------------
+program
+  .command('soroban-tx <hash>')
+  .description('Inspect Soroban transaction execution details, events, and resource usage')
+  .option('-r, --rpc <url>', 'Soroban RPC endpoint', 'https://soroban-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      hash: string,
+      options: { rpc: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      // Validate hash format before touching the network
+      const hashValidation = validateTransactionHash(hash);
+      if (!hashValidation.valid) {
+        if (options.json) outputJsonError(hashValidation.error!);
+        logger.error(hashValidation.error!);
+        process.exit(1);
+      }
+
+      // Validate RPC URL
+      const rpcValidation = validateSorobanUrl(options.rpc);
+      if (!rpcValidation.valid) {
+        if (options.json) outputJsonError(rpcValidation.error!);
+        logger.error(rpcValidation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching Soroban transaction ${hash.slice(0, 12)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await inspectSorobanTransaction({ rpcUrl: options.rpc, hash });
+
+      // ── Offline / unknown error ──────────────────────────────────────────
+      if (result.status === 'UNKNOWN') {
+        spinner.fail(`Failed to reach Soroban RPC: ${result.error}`);
+        if (options.json) outputJsonError(result.error ?? 'Unknown error');
+        process.exit(1);
+      }
+
+      // ── Not found ────────────────────────────────────────────────────────
+      if (result.status === 'NOT_FOUND') {
+        spinner.fail(`Transaction not found: ${hash}`);
+        if (options.json) outputJsonError(result.error ?? 'Transaction not found');
+        process.exit(1);
+      }
+
+      // ── Pending ──────────────────────────────────────────────────────────
+      if (result.status === 'PENDING') {
+        spinner.succeed('Transaction is pending.');
+        const pendingText =
+          `\n${chalk.bold.yellow('=== Soroban Transaction (PENDING) ===')}\n\n` +
+          chalk.yellow('Transaction is still pending inclusion in a ledger.\n') +
+          `Hash: ${result.hash}\n`;
+        writeResult(result, options, pendingText);
+        return;
+      }
+
+      spinner.succeed('Soroban transaction inspection complete.');
+
+      // ── Human-readable output ─────────────────────────────────────────────
+      const statusColor =
+        result.status === 'SUCCESS'
+          ? chalk.green(result.status)
+          : chalk.red(result.status);
+
+      let text = `\n${chalk.bold.green('=== Soroban Transaction Inspection ===')}\n\n`;
+
+      const headerRows: string[][] = [
+        ['Property', 'Value'],
+        ['Transaction Hash', result.hash],
+        ['RPC URL', result.rpcUrl],
+        ['Execution Status', statusColor],
+        ['Response Latency', `${result.latencyMs}ms`],
+        ['Ledger Sequence', result.ledger !== undefined ? String(result.ledger) : 'Unknown'],
+        [
+          'Ledger Close Time',
+          result.ledgerCloseTimeIso ?? (result.ledgerCloseTime !== undefined
+            ? String(result.ledgerCloseTime)
+            : 'Unknown'),
+        ],
+        ['Return Value', result.returnValue ?? 'None'],
+      ];
+      text += formatTable(headerRows);
+
+      // ── Resource usage ────────────────────────────────────────────────────
+      if (result.resources) {
+        text += `\n${chalk.bold.cyan('--- Resource Usage ---')}\n`;
+        const resRows: string[][] = [['Resource', 'Value']];
+        const r = result.resources;
+        if (r.instructions !== undefined)
+          resRows.push(['Instructions', r.instructions.toLocaleString()]);
+        if (r.readBytes !== undefined)
+          resRows.push(['Read Bytes', formatBytes(r.readBytes)]);
+        if (r.writeBytes !== undefined)
+          resRows.push(['Write Bytes', formatBytes(r.writeBytes)]);
+        if (r.readLedgerEntries !== undefined)
+          resRows.push(['Read Ledger Entries', String(r.readLedgerEntries)]);
+        if (r.writeLedgerEntries !== undefined)
+          resRows.push(['Write Ledger Entries', String(r.writeLedgerEntries)]);
+        if (resRows.length > 1) text += formatTable(resRows);
+      }
+
+      // ── Fee information ───────────────────────────────────────────────────
+      if (result.fee) {
+        text += `\n${chalk.bold.cyan('--- Soroban Fee Information ---')}\n`;
+        const feeRows: string[][] = [['Fee Component', 'Amount (stroops)']];
+        const f = result.fee;
+        if (f.totalFee !== undefined)
+          feeRows.push(['Total Fee', String(f.totalFee)]);
+        if (f.inclusionFee !== undefined)
+          feeRows.push(['Inclusion Fee', String(f.inclusionFee)]);
+        if (f.resourceFeeCharged !== undefined)
+          feeRows.push(['Resource Fee Charged', String(f.resourceFeeCharged)]);
+        if (f.refundableFee !== undefined)
+          feeRows.push(['Refundable Fee', String(f.refundableFee)]);
+        if (feeRows.length > 1) text += formatTable(feeRows);
+      }
+
+      // ── Contract events ───────────────────────────────────────────────────
+      if (result.events.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Contract Events (${result.events.length}) ---`)}\n`;
+        for (const [i, ev] of result.events.entries()) {
+          text += `\n${chalk.yellow(`#${i + 1} [${ev.type}]`)}`;
+          if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
+          text += '\n';
+          const evRows: string[][] = [['Field', 'Value']];
+          if (ev.topics.length > 0)
+            evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined)
+            evRows.push(['Data', ev.data]);
+          if (evRows.length > 1) text += formatTable(evRows);
+        }
+      } else {
+        text += `\n${chalk.gray('No contract events emitted.')}\n`;
+      }
+
+      // ── Diagnostic events ─────────────────────────────────────────────────
+      if (result.diagnosticEvents.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Diagnostic Events (${result.diagnosticEvents.length}) ---`)}\n`;
+        for (const [i, ev] of result.diagnosticEvents.entries()) {
+          text += `\n${chalk.yellow(`#${i + 1} [${ev.type}]`)}`;
+          if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
+          text += '\n';
+          const evRows: string[][] = [['Field', 'Value']];
+          if (ev.topics.length > 0)
+            evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined)
+            evRows.push(['Data', ev.data]);
+          if (evRows.length > 1) text += formatTable(evRows);
+        }
+      }
+
+      // ── Failed contract execution warning ─────────────────────────────────
+      if (result.contractFailed) {
+        text += chalk.red(
+          '\n⚠ Contract invocation failed. Review the diagnostic events above for details.\n',
+        );
+      }
+
+      writeResult(result, options, text);
+    },
+  );
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {

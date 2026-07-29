@@ -1,6 +1,7 @@
 import {
   formatBytes,
   formatFeeStatsRows,
+  formatLedgerLinksRows,
   formatLedgerRows,
   formatTable,
   formatXlm,
@@ -27,8 +28,8 @@ describe('Formatter Utilities', () => {
     const tableString = formatTable(data);
     expect(tableString).toContain('Col1');
     expect(tableString).toContain('Val1');
-    expect(tableString).toContain('â”Œ');
-    expect(tableString).toContain('â””');
+    expect(tableString).toContain('┌');
+    expect(tableString).toContain('└');
   });
 
   it('formats ledger inspection rows consistently', () => {
@@ -38,9 +39,66 @@ describe('Formatter Utilities', () => {
       transaction_count: 4,
       operation_count: 9,
       closed_at: '2026-06-29T00:00:00Z',
+      protocol_version: 21,
+      base_fee: 100,
+      base_reserve: '5000000',
+      successful_transaction_count: 4,
     });
+    const findRow = (label: string) => rows.find((r) => r[0] === label);
     expect(rows[1]).toEqual(['Sequence', '123']);
     expect(rows[3]).toEqual(['Previous Hash', 'Unknown']);
+    expect(findRow('Successful Transaction Count')).toEqual(['Successful Transaction Count', '4']);
+    expect(findRow('Protocol Version')).toEqual(['Protocol Version', '21']);
+    expect(findRow('Base Fee')).toEqual(['Base Fee', '100 stroops']);
+    expect(findRow('Base Reserve')).toEqual(['Base Reserve', '5000000 stroops']);
+  });
+
+  it('falls back to "Unknown" placeholders when extended fields are absent', () => {
+    const rows = formatLedgerRows({
+      sequence: 1,
+      hash: 'h',
+      transaction_count: 0,
+      operation_count: 0,
+      closed_at: '2026-01-01T00:00:00Z',
+    });
+    const findRow = (label: string) => rows.find((r) => r[0] === label);
+    expect(findRow('Protocol Version')).toEqual(['Protocol Version', 'Unknown']);
+    expect(findRow('Base Fee')).toEqual(['Base Fee', 'Unknown stroops']);
+    expect(findRow('Base Reserve')).toEqual(['Base Reserve', 'Unknown stroops']);
+    expect(findRow('Successful Transaction Count')).toEqual([
+      'Successful Transaction Count',
+      'Unknown',
+    ]);
+    expect(findRow('Total Coins')).toEqual(['Total Coins', 'Unknown']);
+    expect(findRow('Fee Pool')).toEqual(['Fee Pool', 'Unknown']);
+  });
+
+  it('formats ledger related-resource links (used by --show-links)', () => {
+    const fullLinks = formatLedgerLinksRows({
+      _links: {
+        self: { href: 'https://horizon/ledgers/123' },
+        transactions: { href: 'https://horizon/ledgers/123/transactions' },
+        operations: { href: 'https://horizon/ledgers/123/operations' },
+      },
+    });
+    expect(fullLinks.map((r) => r[0])).toEqual([
+      'Related Resource',
+      'Self',
+      'Transactions',
+      'Operations',
+    ]);
+    expect(fullLinks[3]).toEqual(['Operations', 'https://horizon/ledgers/123/operations']);
+
+    const noLinks = formatLedgerLinksRows({});
+    expect(noLinks).toEqual([
+      ['Related Resource', 'URL'],
+      ['Related Resources', 'No related resources available'],
+    ]);
+
+    const partialLinks = formatLedgerLinksRows({
+      _links: { transactions: { href: 'https://horizon/ledgers/123/transactions' } },
+    });
+    expect(partialLinks.map((r) => r[0])).toEqual(['Related Resource', 'Transactions']);
   });
 
   it('formats fee statistics rows with fallbacks', () => {
