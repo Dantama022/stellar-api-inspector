@@ -576,6 +576,54 @@ npm run dev -- health https://horizon.stellar.org https://horizon-testnet.stella
 }
 ```
 
+### Ledger Range Analysis
+
+Analyze a range of consecutive Stellar ledgers to understand network performance, transaction throughput, and protocol behavior:
+
+```bash
+npm run dev -- ledgers 57000000 57000100
+```
+
+The command retrieves ledger information across the specified range and displays aggregate metrics:
+
+- **Total Ledgers Analyzed** — count of ledgers successfully retrieved
+- **Total Transactions** — sum of all transactions in the range
+- **Total Operations** — sum of all operations in the range
+- **Avg Transactions / Ledger** — mean transactions per ledger
+- **Avg Operations / Ledger** — mean operations per ledger
+- **Avg Close Interval** — average time between consecutive ledger closes
+
+Ledgers with unusually high transaction counts (exceeding the mean + 2σ threshold) are highlighted in a separate table.
+
+Use a custom Horizon endpoint with `-h`:
+
+```bash
+npm run dev -- ledgers 57000000 57000100 -h https://horizon.stellar.org
+```
+
+Control the maximum range size with `--max-range` (default: 200):
+
+```bash
+npm run dev -- ledgers 57000000 57000500 --max-range 500
+```
+
+Invalid ranges (start > end, non-positive integers, ranges exceeding the max) return clear error messages:
+
+```bash
+$ npm run dev -- ledgers 100 50
+# End sequence must be greater than or equal to start sequence
+
+$ npm run dev -- ledgers -1 100
+# Start sequence must be a positive integer
+```
+
+Missing or unavailable ledgers within the range are reported:
+
+```bash
+npm run dev -- ledgers 57000000 57000010 --json
+```
+
+**Example JSON output:**
 ### Soroban Transaction Inspection
 
 Inspect execution details of a Soroban transaction after submission — including execution status, ledger, return value, resource consumption, fee breakdown, contract events, and diagnostic events:
@@ -675,6 +723,35 @@ npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-tes
 {
   "ok": true,
   "data": {
+    "horizonUrl": "https://horizon-testnet.stellar.org",
+    "range": {
+      "start": 57000000,
+      "end": 57000100,
+      "requestedSize": 101,
+      "maxRange": 200
+    },
+    "summary": {
+      "totalLedgers": 101,
+      "totalTransactions": 452,
+      "totalOperations": 1080,
+      "avgTransactionsPerLedger": 4.48,
+      "avgOperationsPerLedger": 10.69,
+      "avgLedgerCloseIntervalSeconds": 5.0,
+      "missingLedgers": 0,
+      "missingSequences": []
+    },
+    "highActivityLedgers": [
+      {
+        "sequence": 57000050,
+        "transactionCount": 85,
+        "operationCount": 200,
+        "threshold": 32
+      }
+    ]
+  }
+}
+```
+
     "hash": "aabbcc...",
     "rpcUrl": "https://soroban-testnet.stellar.org",
     "latencyMs": 84,

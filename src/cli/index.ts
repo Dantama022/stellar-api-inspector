@@ -18,6 +18,8 @@ import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
+import { formatBytes, formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
+import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import {
   formatBytes,
   formatFeeStatsRows,
@@ -33,6 +35,7 @@ import { validateHorizonUrl } from '../utils/urls';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
+import { inspectNetworkPassphrase } from '../services/network-validator';
 import { fetchOperations } from '../services/operations';
 import { inspectNetworkPassphrase } from '../services/network-validator';
 import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
@@ -1257,6 +1260,13 @@ program
   });
 
 // ---------------------------------------------------------------------------
+// 11. Ledger Range Analysis
+// ---------------------------------------------------------------------------
+program
+  .command('ledgers <startSequence> <endSequence>')
+  .description('Analyze a range of Stellar ledgers and display aggregate statistics')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('--max-range <count>', 'Maximum ledger range size', '200')
 // 11. Market Trade History
 // ---------------------------------------------------------------------------
 program
@@ -1269,6 +1279,15 @@ program
   .option('-v, --verbose', 'Verbose mode')
   .action(
     async (
+      startSequence: string,
+      endSequence: string,
+      options: {
+        horizon: string;
+        maxRange: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
       baseAsset: string,
       counterAsset: string,
       options: { horizon: string; limit: string; json?: boolean; output?: string; verbose?: boolean },
@@ -1276,6 +1295,35 @@ program
       if (options.verbose) logger.setLevel('debug');
       if (options.json) logger.setJsonMode(true);
 
+      const startSeq = Number.parseInt(startSequence, 10);
+      const endSeq = Number.parseInt(endSequence, 10);
+
+      if (!Number.isFinite(startSeq) || startSeq <= 0) {
+        const message = 'Start sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (!Number.isFinite(endSeq) || endSeq <= 0) {
+        const message = 'End sequence must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (endSeq < startSeq) {
+        const message = 'End sequence must be greater than or equal to start sequence';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const maxRange = Number.parseInt(options.maxRange, 10);
+      if (!Number.isFinite(maxRange) || maxRange <= 0) {
+        const message = '--max-range must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
       const validation = validateHorizonUrl(options.horizon);
       if (!validation.valid) {
         if (options.json) outputJsonError(validation.error!);
@@ -1308,11 +1356,73 @@ program
       }
 
       const spinner = makeSpinner(
+        `Analyzing ledgers ${startSeq} to ${endSeq}...`,
         `Fetching trades for ${baseAsset} / ${counterAsset}...`,
         !!options.json,
       ).start();
 
       try {
+        const result = await analyzeLedgerRange({
+          horizonUrl: options.horizon,
+          startSequence: startSeq,
+          endSequence: endSeq,
+          maxRange,
+        });
+
+        spinner.succeed(
+          `Analysis complete — ${result.summary.totalLedgers} ledgers, ${result.summary.totalTransactions} transactions, ${result.highActivityLedgers.length} high-activity ledgers.`,
+        );
+
+        let text = `\n${chalk.bold.green('=== Ledger Range Analysis ===')}\n\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        text += `${chalk.cyan('Range:')} ${result.range.start} → ${result.range.end}\n\n`;
+
+        text += `${chalk.bold.cyan('--- Aggregate Statistics ---')}\n`;
+        const statsRows: string[][] = [
+          ['Metric', 'Value'],
+          ['Total Ledgers Analyzed', String(result.summary.totalLedgers)],
+          ['Total Transactions', String(result.summary.totalTransactions)],
+          ['Total Operations', String(result.summary.totalOperations)],
+          ['Avg Transactions / Ledger', String(result.summary.avgTransactionsPerLedger)],
+          ['Avg Operations / Ledger', String(result.summary.avgOperationsPerLedger)],
+          ['Avg Close Interval', `${result.summary.avgLedgerCloseIntervalSeconds}s`],
+        ];
+
+        if (result.summary.missingLedgers > 0) {
+          statsRows.push([
+            'Missing Ledgers',
+            chalk.yellow(String(result.summary.missingLedgers)),
+          ]);
+        }
+
+        text += formatTable(statsRows);
+
+        if (result.highActivityLedgers.length > 0) {
+          text += `\n${chalk.bold.yellow('--- High-Activity Ledgers ---')}\n`;
+          text += chalk.gray('(transaction count exceeds threshold of mean + 2σ)\n\n');
+          const highRows: string[][] = [
+            ['Sequence', 'Transactions', 'Operations', 'Threshold'],
+          ];
+          for (const hl of result.highActivityLedgers) {
+            highRows.push([
+              String(hl.sequence),
+              String(hl.transactionCount),
+              String(hl.operationCount),
+              String(hl.threshold),
+            ]);
+          }
+          text += formatTable(highRows);
+        }
+
+        if (result.summary.missingSequences.length > 0) {
+          text += `\n${chalk.yellow('--- Missing Ledgers ---')}\n`;
+          const missingDisplay =
+            result.summary.missingSequences.length <= 20
+              ? result.summary.missingSequences.join(', ')
+              : `${result.summary.missingSequences.slice(0, 20).join(', ')} ... and ${result.summary.missingSequences.length - 20} more`;
+          text += chalk.yellow(
+            `⚠ ${result.summary.missingLedgers} ledger(s) not found: ${missingDisplay}\n`,
+          );
         const result = await fetchTrades({
           horizonUrl: options.horizon,
           baseAsset: baseParsed.asset,
