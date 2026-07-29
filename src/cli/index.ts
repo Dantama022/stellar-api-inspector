@@ -5,6 +5,7 @@ import ora from 'ora';
 import fs from 'fs';
 import chalk from 'chalk';
 import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
+import { inspectAccountFlags } from '../inspectors/flags';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
 import { auditAccount } from '../inspectors/account';
 import { fetchOrderBook } from '../inspectors/orderbook';
@@ -997,7 +998,102 @@ program
   });
 
 // ---------------------------------------------------------------------------
-// 9. Network Passphrase Inspection
+// ---------------------------------------------------------------------------
+// 9. Account Flags Inspector
+// ---------------------------------------------------------------------------
+program
+  .command("flags <accountId>")
+  .description("Inspect Stellar account authorization flags with explanations")
+  .option("-h, --horizon <url>", "Horizon server endpoint", "https://horizon-testnet.stellar.org")
+  .option("-j, --json", "Output raw JSON (machine-readable, suppresses colors and spinners)")
+  .option("-o, --output <path>", "Save output to file")
+  .action(
+    async (
+      accountId: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (!accountId.startsWith("G") || accountId.length !== 56) {
+        const message = "Invalid Stellar account ID. Must be a 56-character string starting with G.";
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching flags for account ${accountId.slice(0, 8)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await inspectAccountFlags(options.horizon, accountId);
+
+      if (!result) {
+        spinner.fail("Failed to load account from Horizon. Ensure the address is valid.");
+        if (options.json) outputJsonError("Account not found or Horizon unreachable");
+        process.exit(1);
+      }
+
+      spinner.succeed("Account flags retrieved.");
+
+      let text = `
+${chalk.bold.green('=== Stellar Account Flags ===')}
+`;
+      text += `${chalk.cyan('Account ID:')} ${result.accountId}
+`;
+      text += `${chalk.cyan('Sequence:')}   ${result.sequence}
+`;
+      text += `${chalk.cyan('Subentries:')} ${result.subentryCount}
+`;
+
+      if (result.homeDomain) {
+        text += `${chalk.cyan('Home Domain:')} ${result.homeDomain}
+`;
+      }
+      if (result.inflationDestination) {
+        text += `${chalk.cyan('Inflation Dest:')} ${result.inflationDestination}
+`;
+      }
+
+      text += `
+${chalk.bold.cyan('--- Authorization Flags ---')}
+`;
+      const flagRows = [["Flag", "Status", "Purpose"]];
+      for (const exp of result.explanations) {
+        const status = exp.enabled ? chalk.green("ENABLED") : chalk.red("DISABLED");
+        flagRows.push([exp.flag, status, exp.purpose]);
+      }
+      text += formatTable(flagRows);
+
+      text += `
+${chalk.bold.cyan('--- Flag Explanations ---')}
+`;
+      for (const exp of result.explanations) {
+        const status = exp.enabled ? chalk.green("ON") : chalk.red("OFF");
+        text += `
+${chalk.yellow(exp.flag)} [${status}]`;
+        text += `  ${exp.description}
+`;
+      }
+
+      if (result.warnings.length > 0) {
+        text += `
+${chalk.bold.yellow('--- Configuration Warnings ---')}
+`;
+        for (const w of result.warnings) {
+          const prefix = w.severity === 'critical' ? chalk.red('!!') : w.severity === 'warning' ? chalk.yellow('!') : chalk.cyan('i');
+          text += `${prefix} ${w.message}
+`;
+        }
+      }
+
+      writeResult(result, options, text);
+    },
+  );
+
+
+// ---------------------------------------------------------------------------
+// 10. Network Passphrase Inspection
 // ---------------------------------------------------------------------------
 program
   .command('network')
