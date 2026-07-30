@@ -44,6 +44,7 @@ import { inspectNetworkPassphrase } from '../services/network-validator';
 import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
 import { fetchTrades } from '../services/trades';
 import { compareEndpoints } from '../services/endpoint-inspector';
+import { analyzeTransaction, validateTransactionHash as validateTxHash } from '../services/transaction-analyzer';
 import { runInteractiveMode } from '../prompts/main-menu';
 import dotenv from 'dotenv';
 
@@ -82,6 +83,22 @@ const noopSpinner = {
   fail: (_msg?: string) => undefined,
   start: () => noopSpinner,
 };
+
+/**
+ * Map an internal asset movement type key to a human-readable label.
+ */
+function movementTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    xlm_sent: 'XLM Sent',
+    assets_received: 'Assets Received',
+    account_funded: 'Account Funded',
+    trustline_created: 'Trustline Created',
+    asset_exchanged: 'Asset Exchanged',
+    account_merged: 'Account Merged',
+    general: 'General',
+  };
+  return labels[type] || type;
+}
 
 /**
  * Write the result of an inspection command.
@@ -1863,6 +1880,100 @@ program
       }
 
       writeResult(result, options, text);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 13. Transaction Operation Analyzer
+// ---------------------------------------------------------------------------
+program
+  .command('analyze-tx <hash>')
+  .description('Retrieve and analyze a Stellar transaction with human-readable operation descriptions')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      hash: string,
+      options: { horizon: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      // Validate hash format before touching the network
+      const hashValidation = validateTxHash(hash);
+      if (!hashValidation.valid) {
+        if (options.json) outputJsonError(hashValidation.error!);
+        logger.error(hashValidation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Fetching transaction ${hash.slice(0, 12)}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const analysis = await analyzeTransaction({ horizonUrl: options.horizon, hash });
+
+        spinner.succeed(`Transaction analysis complete — ${analysis.transaction.operationCount} operation(s).`);
+
+        // ── Human-readable output ─────────────────────────────────────────────
+        let text = `\n${chalk.bold.green('=== Transaction Analysis Report ===')}\n\n`;
+
+        const statusColor = analysis.transaction.successful
+          ? chalk.green('SUCCESSFUL')
+          : chalk.red('FAILED');
+
+        const headerRows: string[][] = [
+          ['Property', 'Value'],
+          ['Transaction Hash', analysis.transaction.hash],
+          ['Source Account', analysis.transaction.sourceAccount],
+          ['Ledger Sequence', analysis.transaction.ledger !== null ? String(analysis.transaction.ledger) : 'Unknown'],
+          ['Status', statusColor],
+          ['Fee Charged', `${analysis.transaction.feeCharged} stroops`],
+          ['Memo Type', analysis.transaction.memoType],
+          ['Memo Value', analysis.transaction.memoValue || '(none)'],
+          ['Operation Count', String(analysis.transaction.operationCount)],
+        ];
+        text += formatTable(headerRows);
+
+        if (analysis.operations.length > 0) {
+          text += `\n${chalk.bold.cyan(`--- Operations (${analysis.operations.length}) ---`)}\n`;
+          const opRows: string[][] = [['#', 'Type', 'Description']];
+          for (const op of analysis.operations) {
+            const opType = op.supported ? op.type : chalk.yellow(`${op.type} (unsupported)`);
+            opRows.push([String(op.index + 1), opType, op.description]);
+          }
+          text += formatTable(opRows);
+        }
+
+        if (analysis.assetSummary.movements.length > 0) {
+          text += `\n${chalk.bold.cyan('--- Asset Movement Summary ---')}\n`;
+          const movementRows: string[][] = [['Type', 'Details']];
+          for (const m of analysis.assetSummary.movements) {
+            const typeLabel = movementTypeLabel(m.type);
+            movementRows.push([typeLabel, m.description]);
+          }
+          text += formatTable(movementRows);
+        }
+
+        if (analysis.operations.some((op) => !op.supported)) {
+          const unsupportedCount = analysis.operations.filter((op) => !op.supported).length;
+          text += chalk.yellow(
+            `\n⚠ ${unsupportedCount} operation(s) are not supported by the analyzer.\n`,
+          );
+        }
+
+        writeResult(analysis, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
     },
   );
 
