@@ -12,6 +12,7 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 - **🔧 Soroban RPC Capabilities**: Inspect supported RPC methods, endpoint capabilities, and compatibility information.
 - **🔎 Soroban Transaction Inspection**: Inspect execution status, contract events, diagnostic events, resource usage, and fee breakdown for any submitted Soroban transaction.
 - **🧬 Soroban Contract Inspection**: Retrieve contract instance metadata, WASM code hash, ledger footprint, storage counts, and TTL expiration warnings.
+- **📜 Transaction Operation Analysis**: Fetch any Stellar transaction from Horizon and decode each operation into human-readable descriptions, with asset movement summaries and JSON output.
 - **🛡️ Account Auditor**: Detailed structural audits of accounts: analyze thresholds, verify signer weights (multi-sig checks), inspect asset balances, and detect trustline authorization/limit risks.
 - **📈 Market Trade History**: Retrieve recent trades for any Stellar asset pair, display per-trade details, and compute summary statistics (volume, average/high/low price).
 - **📜 Operations History**: Fetch Horizon operations, filter by account/type/limit, and normalize common operation details.
@@ -957,6 +958,136 @@ Save to file:
 ```bash
 npm run dev -- soroban-tx <transactionHash> --json --output tx-report.json
 npm run dev -- compare-endpoints https://horizon.stellar.org https://horizon-testnet.stellar.org --json --output comparison.json
+```
+
+### Transaction Operation Analysis
+
+Analyze a Stellar transaction with human-readable operation descriptions, asset movement summaries, and structured JSON output:
+
+```bash
+npm run dev -- analyze-tx <transactionHash>
+```
+
+The command fetches transaction details and associated operations from Horizon, decodes each operation into a human-readable description, and generates a comprehensive report suitable for debugging and auditing.
+
+**Supported operation types:**
+
+- **Payment** — source, destination, amount, asset
+- **Path Payment (Strict Receive)** — source, destination, amount, path, source asset
+- **Path Payment (Strict Send)** — same as above with destination minimum
+- **Create Account** — funder, new account, starting balance
+- **Change Trust** — trustor, asset, limit, trustee
+- **Manage Sell Offer** — selling asset, buying asset, amount, price, offer ID
+- **Manage Buy Offer** — selling asset, buying asset, amount, price, offer ID
+- **Create Passive Sell Offer** — selling asset, buying asset, amount, price
+- **Account Merge** — source, destination
+- **Set Options** — thresholds, signer updates, flags, home domain, master key weight
+- **Allow Trust** — trustor, trustee, asset, authorization status
+- **Inflation** — source account
+- **Manage Data** — source account, data name/value
+- **Bump Sequence** — source account, new sequence
+- **Create/Claim Claimable Balance** — source, asset, amount, claimants
+- **Sponsorship Operations** — begin/end sponsoring, revoke sponsorship
+- **Clawback** — source, asset, amount
+- **Liquidity Pool Operations** — deposit/withdraw, asset amounts, price range
+
+Report includes a transaction summary (hash, source account, ledger, status, fee, memo) followed by a human-readable operation list and an asset movement summary.
+
+```bash
+# Analyze a specific transaction
+npm run dev -- analyze-tx <64-char-hex-hash>
+
+# Use a custom Horizon endpoint
+npm run dev -- analyze-tx <hash> --horizon https://horizon.stellar.org
+
+# JSON output for automated processing
+npm run dev -- analyze-tx <hash> --json
+
+# Save output to file
+npm run dev -- analyze-tx <hash> --json --output analysis.json
+```
+
+**Example human-readable output:**
+
+```text
+=== Transaction Analysis Report ===
+
+┌──────────────────────┬────────────────────────────────────────────────────┐
+│ Property             │ Value                                              │
+├──────────────────────┼────────────────────────────────────────────────────┤
+│ Transaction Hash     │ ccf9e7f...                                         │
+│ Source Account       │ G...                                               │
+│ Ledger Sequence      │ 50000000                                           │
+│ Status               │ SUCCESSFUL                                         │
+│ Fee Charged          │ 100 stroops                                        │
+│ Memo Type            │ text                                               │
+│ Memo Value           │ Test memo                                          │
+│ Operation Count      │ 3                                                  │
+└──────────────────────┴────────────────────────────────────────────────────┘
+
+--- Operations (3) ---
+
+┌───┬───────────────────────┬──────────────────────────────────────────────────┐
+│ # │ Type                  │ Description                                      │
+├───┼───────────────────────┼──────────────────────────────────────────────────┤
+│ 1 │ payment               │ G... sent 100.0000000 XLM to G...                │
+│ 2 │ create_account        │ G... funded new account G... with 2.0000000 XLM  │
+│ 3 │ set_options           │ G... updated account settings -- home domain: ...│
+└───┴───────────────────────┴──────────────────────────────────────────────────┘
+
+--- Asset Movement Summary ---
+
+┌──────────────────┬───────────────────────────────────────────────────────────┐
+│ Type             │ Details                                                   │
+├──────────────────┼───────────────────────────────────────────────────────────┤
+│ XLM Sent         │ G... sent 100.0000000 XLM to G...                         │
+│ Account Funded   │ G... funded new account G... with 2.0000000 XLM            │
+└──────────────────┴───────────────────────────────────────────────────────────┘
+```
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "transaction": {
+      "hash": "ccf9e7f...",
+      "sourceAccount": "G...",
+      "ledger": 50000000,
+      "successful": true,
+      "feeCharged": "100",
+      "maxFee": "150",
+      "memoType": "text",
+      "memoValue": "Test memo",
+      "operationCount": 3,
+      "createdAt": "2026-01-15T12:00:00Z",
+      "horizonUrl": "https://horizon-testnet.stellar.org"
+    },
+    "operations": [
+      {
+        "index": 0,
+        "type": "payment",
+        "description": "G... sent 100.0000000 XLM to G...",
+        "details": {
+          "source": "G...",
+          "destination": "G...",
+          "amount": "100.0000000",
+          "asset": "XLM"
+        },
+        "supported": true
+      }
+    ],
+    "assetSummary": {
+      "movements": [
+        {
+          "type": "payment",
+          "description": "G... sent 100.0000000 XLM to G..."
+        }
+      ]
+    }
+  }
+}
 ```
 
 ### Options
