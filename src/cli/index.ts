@@ -4,14 +4,13 @@ import { Command } from 'commander';
 import ora from 'ora';
 import fs from 'fs';
 import chalk from 'chalk';
-import { fetchAsset, fetchLedger, inspectHorizon, inspectHorizonFeeStats } from '../inspectors/horizon';
-import { inspectAccountFlags } from '../inspectors/flags';
 import {
   fetchAsset,
   fetchLedger,
   inspectHorizon,
   inspectHorizonFeeStats,
 } from '../inspectors/horizon';
+import { inspectAccountFlags } from '../inspectors/flags';
 import { inspectSoroban, validateSorobanUrl } from '../inspectors/soroban';
 import { inspectRpcCapabilities, validateRpcUrl } from '../inspectors/rpc-capabilities';
 import { formatContractInspectionReport } from '../output/contract-report';
@@ -21,8 +20,6 @@ import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
-import { formatBytes, formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
-import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import {
   formatBytes,
   formatFeeStatsRows,
@@ -31,7 +28,7 @@ import {
   formatTable,
   formatXlm,
 } from '../utils/formatters';
-import { formatFeeStatsRows, formatLedgerRows, formatTable, formatXlm } from '../utils/formatters';
+import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
@@ -40,12 +37,15 @@ import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
 import { inspectNetworkPassphrase } from '../services/network-validator';
 import { fetchOperations } from '../services/operations';
-import { inspectNetworkPassphrase } from '../services/network-validator';
 import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
 import { fetchTrades } from '../services/trades';
 import { compareEndpoints } from '../services/endpoint-inspector';
-import { analyzeTransaction, validateTransactionHash as validateTxHash } from '../services/transaction-analyzer';
+import {
+  analyzeTransaction,
+  validateTransactionHash as validateTxHash,
+} from '../services/transaction-analyzer';
 import { runInteractiveMode } from '../prompts/main-menu';
+import { inspectTls } from '../services/tls-inspector';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -141,7 +141,7 @@ function writeResult(
 // ---------------------------------------------------------------------------
 program
   .command('horizon <url>')
-  .description('Inspect Stellar Horizon endpoint health, metadata, and fee stats')
+  .description('Inspect Stellar Horizon endpoint health, metadata, fee stats, and TLS security')
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
   .option('-v, --verbose', 'Verbose mode')
@@ -165,10 +165,13 @@ program
       process.exit(1);
     }
 
-    const feeStats = await inspectHorizonFeeStats(url);
+    // Run the TLS/SSL security inspection alongside the fee stats request.
+    // TLS failures degrade gracefully: they are surfaced as warnings rather
+    // than failing the whole command.
+    const [feeStats, tls] = await Promise.all([inspectHorizonFeeStats(url), inspectTls(info.url)]);
     spinner.succeed(`Horizon inspection complete.`);
 
-    const outputData = { info, feeStats };
+    const outputData = { info, feeStats, tls };
 
     // Build human-readable text
     let text = `\n${chalk.bold.green('=== Stellar Horizon API Node Inspection ===')}\n\n`;
@@ -223,6 +226,60 @@ program
         ['P99 Fee', `${feeStats.fee_charged.p99} stroops`],
       ];
       text += formatTable(feeRows);
+    }
+
+    // TLS / SSL security inspection section
+    if (tls.inspected) {
+      text += `\n${chalk.bold.cyan('--- TLS / SSL Security Inspection ---')}\n`;
+      const tlsRows: string[][] = [
+        ['Property', 'Value'],
+        ['HTTPS Enabled', tls.httpsEnabled ? chalk.green('YES') : chalk.red('NO')],
+      ];
+
+      if (tls.certificate) {
+        const c = tls.certificate;
+        tlsRows.push(['Negotiated TLS Version', tls.tlsVersion || 'Unknown']);
+        tlsRows.push(['Cipher Suite', tls.cipherSuite || 'Unknown']);
+        tlsRows.push(['Certificate CN', c.commonName || 'Unknown']);
+        if (c.subjectAltNames.length > 0) {
+          tlsRows.push(['Subject Alt Names', c.subjectAltNames.join(', ')]);
+        }
+        tlsRows.push(['Issuer', c.issuerCommonName || 'Unknown']);
+        tlsRows.push(['Serial Number', c.serialNumber]);
+        tlsRows.push(['Signature Algorithm', c.signatureAlgorithm || 'Unknown']);
+        tlsRows.push(['Valid From', c.validFrom]);
+        tlsRows.push(['Valid To', c.validTo]);
+        tlsRows.push([
+          'Expires In',
+          c.expired ? chalk.red('EXPIRED') : `${c.daysRemaining} day(s)`,
+        ]);
+        tlsRows.push(['Self-Signed', c.selfSigned ? chalk.yellow('YES') : chalk.green('NO')]);
+      }
+
+      text += formatTable(tlsRows);
+
+      if (tls.warnings.length > 0) {
+        text += `\n${chalk.bold.yellow('--- TLS Security Warnings ---')}\n`;
+        for (const warning of tls.warnings) {
+          text += `${chalk.yellow('⚠')} ${warning}\n`;
+        }
+      }
+      if (tls.recommendations.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Recommendations ---')}\n`;
+        for (const recommendation of tls.recommendations) {
+          text += `${chalk.cyan('→')} ${recommendation}\n`;
+        }
+      }
+    } else {
+      text += `\n${chalk.bold.cyan('--- TLS / SSL Security Inspection ---')}\n`;
+      if (tls.error) {
+        text += `${chalk.yellow('⚠')} TLS inspection unavailable: ${tls.error}\n`;
+      }
+      if (tls.warnings.length > 0) {
+        for (const warning of tls.warnings) {
+          text += `${chalk.yellow('⚠')} ${warning}\n`;
+        }
+      }
     }
 
     writeResult(outputData, options, text);
@@ -323,8 +380,7 @@ program
     if (info.status === 'offline') {
       const reason = info.error ? `: ${info.error}` : '';
       spinner.fail(`RPC endpoint is offline or unreachable${reason}`);
-      if (options.json)
-        outputJsonError(`RPC endpoint is offline or unreachable: ${url}${reason}`);
+      if (options.json) outputJsonError(`RPC endpoint is offline or unreachable: ${url}${reason}`);
       process.exit(1);
     }
 
@@ -398,7 +454,10 @@ program
       text += `\n${chalk.bold.cyan('--- Capability Summary ---')}\n`;
       const summaryRows = [
         ['Metric', 'Value'],
-        ['Total Methods Probed', String((info.supportedMethods.length || 0) + (info.unsupportedMethods?.length || 0))],
+        [
+          'Total Methods Probed',
+          String((info.supportedMethods.length || 0) + (info.unsupportedMethods?.length || 0)),
+        ],
         ['Supported Methods', chalk.green(String(info.supportedMethods.length || 0))],
         ['Unsupported Methods', chalk.yellow(String(info.unsupportedMethods?.length || 0))],
       ];
@@ -575,7 +634,6 @@ program
       sequence: string,
       options: { horizon: string; showLinks?: boolean; json?: boolean; output?: string },
     ) => {
-    async (sequence: string, options: { horizon: string; json?: boolean; output?: string }) => {
       if (options.json) logger.setJsonMode(true);
 
       const ledgerSequence = Number.parseInt(sequence, 10);
@@ -635,23 +693,6 @@ program
       }
 
       writeResult(result, options, text);
-      const spinner = makeSpinner(`Fetching ledger ${ledgerSequence}...`, !!options.json).start();
-
-      try {
-        const result = await fetchLedger(options.horizon, ledgerSequence);
-        spinner.succeed(`Ledger ${ledgerSequence} retrieved.`);
-
-        let text = `\n${chalk.bold.green('=== Ledger Header Inspection ===')}\n\n`;
-        text += formatTable(formatLedgerRows(result.ledger));
-
-        writeResult(result, options, text);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        spinner.fail(message);
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
     },
   );
 
@@ -1025,10 +1066,7 @@ program
   .option('-o, --output <path>', 'Save output to file')
   .option('-t, --timeout <ms>', 'Request timeout in milliseconds', '10000')
   .action(
-    async (
-      urls: string[],
-      options: { json?: boolean; output?: string; timeout?: string },
-    ) => {
+    async (urls: string[], options: { json?: boolean; output?: string; timeout?: string }) => {
       if (options.json) logger.setJsonMode(true);
 
       if (urls.length === 0) {
@@ -1095,8 +1133,7 @@ program
               ? chalk.magenta('Soroban RPC')
               : chalk.gray('Unknown');
 
-        const statusStr =
-          ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+        const statusStr = ep.status === 'online' ? chalk.green('ONLINE') : chalk.red('OFFLINE');
 
         const latencyStr = ep.status === 'online' ? `${ep.latencyMs}ms` : '-';
 
@@ -1117,7 +1154,8 @@ program
               ? chalk.gray('-')
               : 'Unknown';
 
-        const healthStr = ep.status === 'online' ? chalk.green(ep.healthStatus ?? 'OK') : ep.error ?? '-';
+        const healthStr =
+          ep.status === 'online' ? chalk.green(ep.healthStatus ?? 'OK') : (ep.error ?? '-');
 
         tableRows.push([
           ep.url,
@@ -1148,8 +1186,14 @@ program
         );
       }
 
-      if (!result.differences.networkMismatch && !result.differences.protocolMismatch && !result.differences.hasOfflineEndpoints) {
-        text += chalk.green(`\n✓ All endpoints are compatible — no configuration differences detected.\n`);
+      if (
+        !result.differences.networkMismatch &&
+        !result.differences.protocolMismatch &&
+        !result.differences.hasOfflineEndpoints
+      ) {
+        text += chalk.green(
+          `\n✓ All endpoints are compatible — no configuration differences detected.\n`,
+        );
       }
 
       writeResult(result, options, text);
@@ -1309,20 +1353,18 @@ program
 // 9. Account Flags Inspector
 // ---------------------------------------------------------------------------
 program
-  .command("flags <accountId>")
-  .description("Inspect Stellar account authorization flags with explanations")
-  .option("-h, --horizon <url>", "Horizon server endpoint", "https://horizon-testnet.stellar.org")
-  .option("-j, --json", "Output raw JSON (machine-readable, suppresses colors and spinners)")
-  .option("-o, --output <path>", "Save output to file")
+  .command('flags <accountId>')
+  .description('Inspect Stellar account authorization flags with explanations')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
   .action(
-    async (
-      accountId: string,
-      options: { horizon: string; json?: boolean; output?: string },
-    ) => {
+    async (accountId: string, options: { horizon: string; json?: boolean; output?: string }) => {
       if (options.json) logger.setJsonMode(true);
 
-      if (!accountId.startsWith("G") || accountId.length !== 56) {
-        const message = "Invalid Stellar account ID. Must be a 56-character string starting with G.";
+      if (!accountId.startsWith('G') || accountId.length !== 56) {
+        const message =
+          'Invalid Stellar account ID. Must be a 56-character string starting with G.';
         if (options.json) outputJsonError(message);
         logger.error(message);
         process.exit(1);
@@ -1336,12 +1378,12 @@ program
       const result = await inspectAccountFlags(options.horizon, accountId);
 
       if (!result) {
-        spinner.fail("Failed to load account from Horizon. Ensure the address is valid.");
-        if (options.json) outputJsonError("Account not found or Horizon unreachable");
+        spinner.fail('Failed to load account from Horizon. Ensure the address is valid.');
+        if (options.json) outputJsonError('Account not found or Horizon unreachable');
         process.exit(1);
       }
 
-      spinner.succeed("Account flags retrieved.");
+      spinner.succeed('Account flags retrieved.');
 
       let text = `
 ${chalk.bold.green('=== Stellar Account Flags ===')}
@@ -1365,9 +1407,9 @@ ${chalk.bold.green('=== Stellar Account Flags ===')}
       text += `
 ${chalk.bold.cyan('--- Authorization Flags ---')}
 `;
-      const flagRows = [["Flag", "Status", "Purpose"]];
+      const flagRows = [['Flag', 'Status', 'Purpose']];
       for (const exp of result.explanations) {
-        const status = exp.enabled ? chalk.green("ENABLED") : chalk.red("DISABLED");
+        const status = exp.enabled ? chalk.green('ENABLED') : chalk.red('DISABLED');
         flagRows.push([exp.flag, status, exp.purpose]);
       }
       text += formatTable(flagRows);
@@ -1376,7 +1418,7 @@ ${chalk.bold.cyan('--- Authorization Flags ---')}
 ${chalk.bold.cyan('--- Flag Explanations ---')}
 `;
       for (const exp of result.explanations) {
-        const status = exp.enabled ? chalk.green("ON") : chalk.red("OFF");
+        const status = exp.enabled ? chalk.green('ON') : chalk.red('OFF');
         text += `
 ${chalk.yellow(exp.flag)} [${status}]`;
         text += `  ${exp.description}
@@ -1388,7 +1430,12 @@ ${chalk.yellow(exp.flag)} [${status}]`;
 ${chalk.bold.yellow('--- Configuration Warnings ---')}
 `;
         for (const w of result.warnings) {
-          const prefix = w.severity === 'critical' ? chalk.red('!!') : w.severity === 'warning' ? chalk.yellow('!') : chalk.cyan('i');
+          const prefix =
+            w.severity === 'critical'
+              ? chalk.red('!!')
+              : w.severity === 'warning'
+                ? chalk.yellow('!')
+                : chalk.cyan('i');
           text += `${prefix} ${w.message}
 `;
         }
@@ -1397,7 +1444,6 @@ ${chalk.bold.yellow('--- Configuration Warnings ---')}
       writeResult(result, options, text);
     },
   );
-
 
 // ---------------------------------------------------------------------------
 // 10. Network Passphrase Inspection
@@ -1494,13 +1540,6 @@ program
   .description('Analyze a range of Stellar ledgers and display aggregate statistics')
   .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
   .option('--max-range <count>', 'Maximum ledger range size', '200')
-// 11. Market Trade History
-// ---------------------------------------------------------------------------
-program
-  .command('trades <baseAsset> <counterAsset>')
-  .description('Fetch and summarize recent trade history for a Stellar asset pair')
-  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
-  .option('-l, --limit <count>', 'Maximum number of trades to return', '20')
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
   .option('-v, --verbose', 'Verbose mode')
@@ -1515,9 +1554,6 @@ program
         output?: string;
         verbose?: boolean;
       },
-      baseAsset: string,
-      counterAsset: string,
-      options: { horizon: string; limit: string; json?: boolean; output?: string; verbose?: boolean },
     ) => {
       if (options.verbose) logger.setLevel('debug');
       if (options.json) logger.setJsonMode(true);
@@ -1551,6 +1587,110 @@ program
         const message = '--max-range must be a positive integer';
         if (options.json) outputJsonError(message);
         logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Analyzing ledgers ${startSeq} to ${endSeq}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const result = await analyzeLedgerRange({
+          horizonUrl: options.horizon,
+          startSequence: startSeq,
+          endSequence: endSeq,
+          maxRange,
+        });
+
+        spinner.succeed(
+          `Analysis complete — ${result.summary.totalLedgers} ledgers, ${result.summary.totalTransactions} transactions, ${result.highActivityLedgers.length} high-activity ledgers.`,
+        );
+
+        let text = `\n${chalk.bold.green('=== Ledger Range Analysis ===')}\n\n`;
+        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
+        text += `${chalk.cyan('Range:')} ${result.range.start} → ${result.range.end}\n\n`;
+
+        text += `${chalk.bold.cyan('--- Aggregate Statistics ---')}\n`;
+        const statsRows: string[][] = [
+          ['Metric', 'Value'],
+          ['Total Ledgers Analyzed', String(result.summary.totalLedgers)],
+          ['Total Transactions', String(result.summary.totalTransactions)],
+          ['Total Operations', String(result.summary.totalOperations)],
+          ['Avg Transactions / Ledger', String(result.summary.avgTransactionsPerLedger)],
+          ['Avg Operations / Ledger', String(result.summary.avgOperationsPerLedger)],
+          ['Avg Close Interval', `${result.summary.avgLedgerCloseIntervalSeconds}s`],
+        ];
+
+        if (result.summary.missingLedgers > 0) {
+          statsRows.push(['Missing Ledgers', chalk.yellow(String(result.summary.missingLedgers))]);
+        }
+
+        text += formatTable(statsRows);
+
+        if (result.highActivityLedgers.length > 0) {
+          text += `\n${chalk.bold.yellow('--- High-Activity Ledgers ---')}\n`;
+          text += chalk.gray('(transaction count exceeds threshold of mean + 2σ)\n\n');
+          const highRows: string[][] = [['Sequence', 'Transactions', 'Operations', 'Threshold']];
+          for (const hl of result.highActivityLedgers) {
+            highRows.push([
+              String(hl.sequence),
+              String(hl.transactionCount),
+              String(hl.operationCount),
+              String(hl.threshold),
+            ]);
+          }
+          text += formatTable(highRows);
+        }
+
+        if (result.summary.missingSequences.length > 0) {
+          text += `\n${chalk.yellow('--- Missing Ledgers ---')}\n`;
+          const missingDisplay =
+            result.summary.missingSequences.length <= 20
+              ? result.summary.missingSequences.join(', ')
+              : `${result.summary.missingSequences.slice(0, 20).join(', ')} ... and ${result.summary.missingSequences.length - 20} more`;
+          text += chalk.yellow(
+            `⚠ ${result.summary.missingLedgers} ledger(s) not found: ${missingDisplay}\n`,
+          );
+        }
+
+        writeResult(result, options, text);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// 11. Market Trade History
+// ---------------------------------------------------------------------------
+program
+  .command('trades <baseAsset> <counterAsset>')
+  .description('Fetch and summarize recent trade history for a Stellar asset pair')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-l, --limit <count>', 'Maximum number of trades to return', '20')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      baseAsset: string,
+      counterAsset: string,
+      options: {
+        horizon: string;
+        limit: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
       const validation = validateHorizonUrl(options.horizon);
       if (!validation.valid) {
         if (options.json) outputJsonError(validation.error!);
@@ -1583,73 +1723,11 @@ program
       }
 
       const spinner = makeSpinner(
-        `Analyzing ledgers ${startSeq} to ${endSeq}...`,
         `Fetching trades for ${baseAsset} / ${counterAsset}...`,
         !!options.json,
       ).start();
 
       try {
-        const result = await analyzeLedgerRange({
-          horizonUrl: options.horizon,
-          startSequence: startSeq,
-          endSequence: endSeq,
-          maxRange,
-        });
-
-        spinner.succeed(
-          `Analysis complete — ${result.summary.totalLedgers} ledgers, ${result.summary.totalTransactions} transactions, ${result.highActivityLedgers.length} high-activity ledgers.`,
-        );
-
-        let text = `\n${chalk.bold.green('=== Ledger Range Analysis ===')}\n\n`;
-        text += `${chalk.cyan('Horizon:')} ${result.horizonUrl}\n`;
-        text += `${chalk.cyan('Range:')} ${result.range.start} → ${result.range.end}\n\n`;
-
-        text += `${chalk.bold.cyan('--- Aggregate Statistics ---')}\n`;
-        const statsRows: string[][] = [
-          ['Metric', 'Value'],
-          ['Total Ledgers Analyzed', String(result.summary.totalLedgers)],
-          ['Total Transactions', String(result.summary.totalTransactions)],
-          ['Total Operations', String(result.summary.totalOperations)],
-          ['Avg Transactions / Ledger', String(result.summary.avgTransactionsPerLedger)],
-          ['Avg Operations / Ledger', String(result.summary.avgOperationsPerLedger)],
-          ['Avg Close Interval', `${result.summary.avgLedgerCloseIntervalSeconds}s`],
-        ];
-
-        if (result.summary.missingLedgers > 0) {
-          statsRows.push([
-            'Missing Ledgers',
-            chalk.yellow(String(result.summary.missingLedgers)),
-          ]);
-        }
-
-        text += formatTable(statsRows);
-
-        if (result.highActivityLedgers.length > 0) {
-          text += `\n${chalk.bold.yellow('--- High-Activity Ledgers ---')}\n`;
-          text += chalk.gray('(transaction count exceeds threshold of mean + 2σ)\n\n');
-          const highRows: string[][] = [
-            ['Sequence', 'Transactions', 'Operations', 'Threshold'],
-          ];
-          for (const hl of result.highActivityLedgers) {
-            highRows.push([
-              String(hl.sequence),
-              String(hl.transactionCount),
-              String(hl.operationCount),
-              String(hl.threshold),
-            ]);
-          }
-          text += formatTable(highRows);
-        }
-
-        if (result.summary.missingSequences.length > 0) {
-          text += `\n${chalk.yellow('--- Missing Ledgers ---')}\n`;
-          const missingDisplay =
-            result.summary.missingSequences.length <= 20
-              ? result.summary.missingSequences.join(', ')
-              : `${result.summary.missingSequences.slice(0, 20).join(', ')} ... and ${result.summary.missingSequences.length - 20} more`;
-          text += chalk.yellow(
-            `⚠ ${result.summary.missingLedgers} ledger(s) not found: ${missingDisplay}\n`,
-          );
         const result = await fetchTrades({
           horizonUrl: options.horizon,
           baseAsset: baseParsed.asset,
@@ -1670,7 +1748,15 @@ program
         } else {
           // Trade rows
           const tradeRows = [
-            ['Trade ID', 'Timestamp', 'Base Asset', 'Counter Asset', 'Price', 'Base Amount', 'Counter Amount'],
+            [
+              'Trade ID',
+              'Timestamp',
+              'Base Asset',
+              'Counter Asset',
+              'Price',
+              'Base Amount',
+              'Counter Amount',
+            ],
           ];
           for (const trade of result.trades) {
             tradeRows.push([
@@ -1710,8 +1796,6 @@ program
       }
     },
   );
-
-// ---------------------------------------------------------------------------
 // 12. Soroban Transaction Inspector
 // ---------------------------------------------------------------------------
 program
@@ -1781,9 +1865,7 @@ program
 
       // ── Human-readable output ─────────────────────────────────────────────
       const statusColor =
-        result.status === 'SUCCESS'
-          ? chalk.green(result.status)
-          : chalk.red(result.status);
+        result.status === 'SUCCESS' ? chalk.green(result.status) : chalk.red(result.status);
 
       let text = `\n${chalk.bold.green('=== Soroban Transaction Inspection ===')}\n\n`;
 
@@ -1796,9 +1878,8 @@ program
         ['Ledger Sequence', result.ledger !== undefined ? String(result.ledger) : 'Unknown'],
         [
           'Ledger Close Time',
-          result.ledgerCloseTimeIso ?? (result.ledgerCloseTime !== undefined
-            ? String(result.ledgerCloseTime)
-            : 'Unknown'),
+          result.ledgerCloseTimeIso ??
+            (result.ledgerCloseTime !== undefined ? String(result.ledgerCloseTime) : 'Unknown'),
         ],
         ['Return Value', result.returnValue ?? 'None'],
       ];
@@ -1811,10 +1892,8 @@ program
         const r = result.resources;
         if (r.instructions !== undefined)
           resRows.push(['Instructions', r.instructions.toLocaleString()]);
-        if (r.readBytes !== undefined)
-          resRows.push(['Read Bytes', formatBytes(r.readBytes)]);
-        if (r.writeBytes !== undefined)
-          resRows.push(['Write Bytes', formatBytes(r.writeBytes)]);
+        if (r.readBytes !== undefined) resRows.push(['Read Bytes', formatBytes(r.readBytes)]);
+        if (r.writeBytes !== undefined) resRows.push(['Write Bytes', formatBytes(r.writeBytes)]);
         if (r.readLedgerEntries !== undefined)
           resRows.push(['Read Ledger Entries', String(r.readLedgerEntries)]);
         if (r.writeLedgerEntries !== undefined)
@@ -1827,10 +1906,8 @@ program
         text += `\n${chalk.bold.cyan('--- Soroban Fee Information ---')}\n`;
         const feeRows: string[][] = [['Fee Component', 'Amount (stroops)']];
         const f = result.fee;
-        if (f.totalFee !== undefined)
-          feeRows.push(['Total Fee', String(f.totalFee)]);
-        if (f.inclusionFee !== undefined)
-          feeRows.push(['Inclusion Fee', String(f.inclusionFee)]);
+        if (f.totalFee !== undefined) feeRows.push(['Total Fee', String(f.totalFee)]);
+        if (f.inclusionFee !== undefined) feeRows.push(['Inclusion Fee', String(f.inclusionFee)]);
         if (f.resourceFeeCharged !== undefined)
           feeRows.push(['Resource Fee Charged', String(f.resourceFeeCharged)]);
         if (f.refundableFee !== undefined)
@@ -1846,10 +1923,8 @@ program
           if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
           text += '\n';
           const evRows: string[][] = [['Field', 'Value']];
-          if (ev.topics.length > 0)
-            evRows.push(['Topics', ev.topics.join(', ')]);
-          if (ev.data !== undefined)
-            evRows.push(['Data', ev.data]);
+          if (ev.topics.length > 0) evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined) evRows.push(['Data', ev.data]);
           if (evRows.length > 1) text += formatTable(evRows);
         }
       } else {
@@ -1864,10 +1939,8 @@ program
           if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
           text += '\n';
           const evRows: string[][] = [['Field', 'Value']];
-          if (ev.topics.length > 0)
-            evRows.push(['Topics', ev.topics.join(', ')]);
-          if (ev.data !== undefined)
-            evRows.push(['Data', ev.data]);
+          if (ev.topics.length > 0) evRows.push(['Topics', ev.topics.join(', ')]);
+          if (ev.data !== undefined) evRows.push(['Data', ev.data]);
           if (evRows.length > 1) text += formatTable(evRows);
         }
       }
@@ -1888,7 +1961,9 @@ program
 // ---------------------------------------------------------------------------
 program
   .command('analyze-tx <hash>')
-  .description('Retrieve and analyze a Stellar transaction with human-readable operation descriptions')
+  .description(
+    'Retrieve and analyze a Stellar transaction with human-readable operation descriptions',
+  )
   .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
@@ -1917,7 +1992,9 @@ program
       try {
         const analysis = await analyzeTransaction({ horizonUrl: options.horizon, hash });
 
-        spinner.succeed(`Transaction analysis complete — ${analysis.transaction.operationCount} operation(s).`);
+        spinner.succeed(
+          `Transaction analysis complete — ${analysis.transaction.operationCount} operation(s).`,
+        );
 
         // ── Human-readable output ─────────────────────────────────────────────
         let text = `\n${chalk.bold.green('=== Transaction Analysis Report ===')}\n\n`;
@@ -1930,7 +2007,10 @@ program
           ['Property', 'Value'],
           ['Transaction Hash', analysis.transaction.hash],
           ['Source Account', analysis.transaction.sourceAccount],
-          ['Ledger Sequence', analysis.transaction.ledger !== null ? String(analysis.transaction.ledger) : 'Unknown'],
+          [
+            'Ledger Sequence',
+            analysis.transaction.ledger !== null ? String(analysis.transaction.ledger) : 'Unknown',
+          ],
           ['Status', statusColor],
           ['Fee Charged', `${analysis.transaction.feeCharged} stroops`],
           ['Memo Type', analysis.transaction.memoType],

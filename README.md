@@ -132,6 +132,90 @@ When rate limit headers are absent, `rateLimit` fields are all `null`:
 }
 ```
 
+#### TLS / SSL Security Inspection
+
+Every `horizon` inspection also evaluates the TLS/SSL security posture of the endpoint:
+
+- **HTTPS enforcement** — endpoints served over plain `http://` are flagged with a warning and a recommendation to enable TLS.
+- **Certificate metadata** — Common Name (CN), Subject Alternative Names (SANs), issuer, serial number, and signature algorithm.
+- **Validity window** — `Valid From` / `Valid To` dates plus a live expiration countdown (`Expires In`).
+- **Expiration warnings** — expired certificates and certificates expiring within 30 days are flagged.
+- **Self-signed detection** — self-signed certificates are flagged with a recommendation to use a CA-issued certificate.
+- **Protocol & cipher suite** — the negotiated TLS version and cipher suite are displayed; TLS 1.0 / TLS 1.1 are flagged as insecure.
+- **Recommendations** — actionable remediation steps are printed for every warning.
+
+The inspection connects with Node's `tls.connect` (`rejectUnauthorized: false`, inspection-only — no sensitive data is exchanged) and degrades gracefully: connection failures, timeouts, and missing certificates are reported without failing the command.
+
+```bash
+npm run dev -- horizon https://horizon-testnet.stellar.org
+```
+
+Example output section:
+
+```text
+--- TLS / SSL Security Inspection ---
+┌──────────────────────────┬──────────────────────────────────────┐
+│ Property                 │ Value                                │
+├──────────────────────────┼──────────────────────────────────────┤
+│ HTTPS Enabled            │ YES                                  │
+│ Negotiated TLS Version   │ TLSv1.3                              │
+│ Cipher Suite             │ TLS_AES_256_GCM_SHA384               │
+│ Certificate CN           │ horizon-testnet.stellar.org          │
+│ Subject Alt Names        │ DNS:horizon-testnet.stellar.org      │
+│ Issuer                   │ R3                                   │
+│ Serial Number            │ 03:...                               │
+│ Signature Algorithm      │ sha256WithRSAEncryption              │
+│ Valid From               │ Jun 15 00:00:00 2025 GMT             │
+│ Valid To                 │ Jun 15 23:59:59 2026 GMT             │
+│ Expires In               │ 310 day(s)                           │
+│ Self-Signed              │ NO                                   │
+└──────────────────────────┴──────────────────────────────────────┘
+```
+
+TLS findings are included in JSON output under the `tls` key:
+
+```bash
+npm run dev -- horizon https://horizon-testnet.stellar.org --json
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "info": { "url": "https://horizon-testnet.stellar.org", "status": "online" },
+    "feeStats": { },
+    "tls": {
+      "inspected": true,
+      "httpsEnabled": true,
+      "error": null,
+      "tlsVersion": "TLSv1.3",
+      "cipherSuite": "TLS_AES_256_GCM_SHA384",
+      "insecureProtocol": false,
+      "certificate": {
+        "subject": { "C": "US", "O": "Let's Encrypt", "CN": "horizon-testnet.stellar.org" },
+        "commonName": "horizon-testnet.stellar.org",
+        "subjectAltNames": ["DNS:horizon-testnet.stellar.org"],
+        "issuer": { "C": "US", "O": "Let's Encrypt", "CN": "R3" },
+        "issuerCommonName": "R3",
+        "serialNumber": "03:...",
+        "signatureAlgorithm": "sha256WithRSAEncryption",
+        "validFrom": "Jun 15 00:00:00 2025 GMT",
+        "validTo": "Jun 15 23:59:59 2026 GMT",
+        "expiresAt": "2026-06-15T23:59:59.000Z",
+        "daysRemaining": 310,
+        "expired": false,
+        "expiringSoon": false,
+        "selfSigned": false
+      },
+      "warnings": [],
+      "recommendations": []
+    }
+  }
+}
+```
+
+Endpoints served over plain `http://` report `httpsEnabled: false` with a warning recommending HTTPS. If the TLS handshake cannot be completed (timeout, connection refused, missing certificate), the command still succeeds and surfaces the failure under `tls.error` with a corresponding warning — Horizon endpoint inspection is never blocked by TLS issues.
+
 ### Soroban RPC Inspection
 Verify a Soroban RPC node's health, network configuration, protocol version, and ledger synchronization status:
 
