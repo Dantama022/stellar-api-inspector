@@ -137,9 +137,7 @@ export async function fetchAccountActivity(query: ActivityQuery): Promise<Activi
   const records = txCollection._embedded?.records ?? [];
 
   // Resolve operation types for each transaction concurrently
-  const transactions = await Promise.all(
-    records.map((tx) => enrichTransaction(tx, horizonUrl)),
-  );
+  const transactions = await Promise.all(records.map((tx) => enrichTransaction(tx, horizonUrl)));
 
   // The next-page cursor is the paging_token of the last transaction
   const lastRecord = records[records.length - 1];

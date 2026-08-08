@@ -126,14 +126,8 @@ export async function analyzeLedgerRange(
   }
 
   const totalLedgers = records.length;
-  const totalTransactions = records.reduce(
-    (sum, r) => sum + r.transaction_count,
-    0,
-  );
-  const totalOperations = records.reduce(
-    (sum, r) => sum + r.operation_count,
-    0,
-  );
+  const totalTransactions = records.reduce((sum, r) => sum + r.transaction_count, 0);
+  const totalOperations = records.reduce((sum, r) => sum + r.operation_count, 0);
   const avgTransactionsPerLedger =
     totalLedgers > 0 ? +(totalTransactions / totalLedgers).toFixed(2) : 0;
   const avgOperationsPerLedger =
@@ -147,21 +141,14 @@ export async function analyzeLedgerRange(
       const t2 = new Date(records[i].closed_at).getTime();
       totalIntervalMs += t2 - t1;
     }
-    avgLedgerCloseIntervalSeconds = +(
-      totalIntervalMs /
-      1000 /
-      (records.length - 1)
-    ).toFixed(1);
+    avgLedgerCloseIntervalSeconds = +(totalIntervalMs / 1000 / (records.length - 1)).toFixed(1);
   }
 
   const highActivityLedgers: HighActivityLedger[] = [];
   if (records.length > 0) {
     const mean = totalTransactions / totalLedgers;
     const variance =
-      records.reduce(
-        (sum, r) => sum + Math.pow(r.transaction_count - mean, 2),
-        0,
-      ) / totalLedgers;
+      records.reduce((sum, r) => sum + Math.pow(r.transaction_count - mean, 2), 0) / totalLedgers;
     const stddev = Math.sqrt(variance);
     const threshold = mean + 2 * stddev;
 

@@ -120,9 +120,7 @@ describe('compareEndpoints', () => {
           protocolVersion: 21,
         }),
       )
-      .mockResolvedValueOnce(
-        sorobanResponse('getLatestLedger', { sequence: 4500000 }),
-      );
+      .mockResolvedValueOnce(sorobanResponse('getLatestLedger', { sequence: 4500000 }));
 
     global.fetch = fetchMock;
 
@@ -321,10 +319,7 @@ describe('compareEndpoints', () => {
 
     global.fetch = fetchMock;
 
-    const result = await compareEndpoints([
-      'https://v21.example.com',
-      'https://v20.example.com',
-    ]);
+    const result = await compareEndpoints(['https://v21.example.com', 'https://v20.example.com']);
 
     expect(result.differences.protocolMismatch).toBe(true);
   });

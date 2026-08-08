@@ -57,26 +57,34 @@ function getFlagExplanations(flags: {
     {
       flag: 'Authorization Required',
       enabled: flags.authRequired,
-      description: 'The issuing account must approve trustlines before an asset holder can receive or send the asset.',
-      purpose: 'Used by regulated asset issuers to maintain KYC/AML control over who holds the asset.',
+      description:
+        'The issuing account must approve trustlines before an asset holder can receive or send the asset.',
+      purpose:
+        'Used by regulated asset issuers to maintain KYC/AML control over who holds the asset.',
     },
     {
       flag: 'Authorization Revocable',
       enabled: flags.authRevocable,
-      description: 'The issuing account can freeze or revoke trustlines, preventing the asset holder from transacting.',
-      purpose: 'Allows the issuer to respond to regulatory actions, fraud, or legal judgments by locking specific holders.',
+      description:
+        'The issuing account can freeze or revoke trustlines, preventing the asset holder from transacting.',
+      purpose:
+        'Allows the issuer to respond to regulatory actions, fraud, or legal judgments by locking specific holders.',
     },
     {
       flag: 'Authorization Immutable',
       enabled: flags.authImmutable,
-      description: 'Once set, neither Authorization Required nor Authorization Revocable can ever be cleared.',
-      purpose: 'Maximum trust signal to holders: the issuer permanently commits to the current authorization model.',
+      description:
+        'Once set, neither Authorization Required nor Authorization Revocable can ever be cleared.',
+      purpose:
+        'Maximum trust signal to holders: the issuer permanently commits to the current authorization model.',
     },
     {
       flag: 'Clawback Enabled',
       enabled: flags.authClawbackEnabled,
-      description: "The issuing account can reclaim tokens from a holder's trustline without the holder's consent.",
-      purpose: 'Required for regulatory compliance (e.g., recovering assets sent to lost addresses).',
+      description:
+        "The issuing account can reclaim tokens from a holder's trustline without the holder's consent.",
+      purpose:
+        'Required for regulatory compliance (e.g., recovering assets sent to lost addresses).',
     },
   ];
 }
@@ -89,7 +97,7 @@ function getFlagWarnings(flags: {
 }): FlagWarning[] {
   const warnings: FlagWarning[] = [];
 
-  if (!flags.authRequired && (flags.authRevocable || flags.clawbackEnabled)) {
+  if (!flags.authRequired && (flags.authRevocable || flags.authClawbackEnabled)) {
     warnings.push({
       flag: 'Authorization Required',
       message: 'AuthRequired is disabled but AuthRevocable or Clawback is enabled.',
@@ -97,7 +105,7 @@ function getFlagWarnings(flags: {
     });
   }
 
-  if (flags.authRequired && flags.authRevocable && flags.clawbackEnabled) {
+  if (flags.authRequired && flags.authRevocable && flags.authClawbackEnabled) {
     warnings.push({
       flag: 'Full Control',
       message: 'All auth flags enabled: account can restrict, freeze, and claw back tokens.',
@@ -116,7 +124,12 @@ export async function inspectAccountFlags(
   horizonUrl: string,
   accountId: string,
 ): Promise<AccountFlagsResult | null> {
-  if (!accountId || typeof accountId !== 'string' || !accountId.startsWith('G') || accountId.length !== 56) {
+  if (
+    !accountId ||
+    typeof accountId !== 'string' ||
+    !accountId.startsWith('G') ||
+    accountId.length !== 56
+  ) {
     logger.error('Invalid Stellar account ID: ' + accountId);
     return null;
   }
@@ -135,9 +148,10 @@ export async function inspectAccountFlags(
     const explanations = getFlagExplanations(flags);
     const warnings = getFlagWarnings(flags);
 
-    const rawData = (acc as unknown) as Record<string, unknown>;
+    const rawData = acc as unknown as Record<string, unknown>;
     const homeDomain = typeof rawData.home_domain === 'string' ? rawData.home_domain : null;
-    const inflationDest = typeof rawData.inflation_dest === 'string' ? rawData.inflation_dest : null;
+    const inflationDest =
+      typeof rawData.inflation_dest === 'string' ? rawData.inflation_dest : null;
 
     return {
       accountId: acc.id,

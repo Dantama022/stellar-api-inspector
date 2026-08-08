@@ -205,7 +205,7 @@ export interface SorobanTxResult {
 const TX_HASH_REGEX = /^[0-9a-fA-F]{64}$/;
 
 export function validateTransactionHash(hash: string): { valid: boolean; error?: string } {
-  if (!hash || !hash.trim()) {
+  if (!hash?.trim()) {
     return { valid: false, error: 'Transaction hash must not be empty.' };
   }
   if (!TX_HASH_REGEX.test(hash.trim())) {
@@ -266,10 +266,8 @@ function normaliseResources(
     instructions: raw.instructions,
     readBytes: raw.readBytes,
     writeBytes: raw.writeBytes,
-    readLedgerEntries:
-      raw.readLedgerEntries ?? raw.footprint?.readOnly?.length,
-    writeLedgerEntries:
-      raw.writeLedgerEntries ?? raw.footprint?.readWrite?.length,
+    readLedgerEntries: raw.readLedgerEntries ?? raw.footprint?.readOnly?.length,
+    writeLedgerEntries: raw.writeLedgerEntries ?? raw.footprint?.readWrite?.length,
   };
 }
 
