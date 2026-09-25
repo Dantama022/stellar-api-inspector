@@ -106,7 +106,10 @@ interface HorizonSuccess {
   healthStatus: string;
 }
 
-async function tryHorizon(url: string, timeoutMs: number): Promise<HorizonSuccess | OfflineAttempt> {
+async function tryHorizon(
+  url: string,
+  timeoutMs: number,
+): Promise<HorizonSuccess | OfflineAttempt> {
   const validation = validateHorizonUrl(url);
   if (!validation.valid) {
     return { status: 'offline', error: validation.error!, latencyMs: 0 };
@@ -220,7 +223,10 @@ async function sorobanRpcCall<T>(
   return [json.result, elapsed];
 }
 
-async function trySoroban(url: string, timeoutMs: number): Promise<SorobanSuccess | OfflineAttempt> {
+async function trySoroban(
+  url: string,
+  timeoutMs: number,
+): Promise<SorobanSuccess | OfflineAttempt> {
   try {
     const [, healthLatencyMs] = await sorobanRpcCall<SorobanHealthResult>(
       url,
@@ -232,11 +238,7 @@ async function trySoroban(url: string, timeoutMs: number): Promise<SorobanSucces
     let networkPassphrase: string | undefined;
     let protocolVersion: number | undefined;
     try {
-      const [networkRes] = await sorobanRpcCall<SorobanNetworkResult>(
-        url,
-        'getNetwork',
-        timeoutMs,
-      );
+      const [networkRes] = await sorobanRpcCall<SorobanNetworkResult>(url, 'getNetwork', timeoutMs);
       networkPassphrase = networkRes?.networkPassphrase ?? networkRes?.passphrase;
       protocolVersion = networkRes?.protocolVersion;
     } catch {
@@ -284,10 +286,7 @@ async function trySoroban(url: string, timeoutMs: number): Promise<SorobanSucces
  *    classify as "soroban-rpc".
  * 3. If both fail, classify as "unknown" and include the error message.
  */
-async function detectAndInspect(
-  url: string,
-  timeoutMs: number,
-): Promise<EndpointComparisonEntry> {
+async function detectAndInspect(url: string, timeoutMs: number): Promise<EndpointComparisonEntry> {
   // ── 1. Try Horizon ──────────────────────────────────────────────────────
   const horizonResult = await tryHorizon(url, timeoutMs);
 

@@ -80,9 +80,7 @@ describe('analyzeLedgerRange', () => {
   });
 
   it('returns aggregate statistics for a valid ledger range', async () => {
-    global.fetch = makePaginatedMock([
-      { startSeq: 100, count: 5, txCount: 10, opCount: 25 },
-    ]);
+    global.fetch = makePaginatedMock([{ startSeq: 100, count: 5, txCount: 10, opCount: 25 }]);
 
     const result = await analyzeLedgerRange({
       horizonUrl,

@@ -14,11 +14,7 @@ const VALID_HASH = 'a'.repeat(64);
  * Builds a mock fetch that dispatches different results per JSON-RPC method.
  * Pass an Error instance as the result value to simulate a JSON-RPC error.
  */
-function buildMethodMock(
-  handlers: Record<string, unknown>,
-  httpOk = true,
-  httpStatus = 200,
-) {
+function buildMethodMock(handlers: Record<string, unknown>, httpOk = true, httpStatus = 200) {
   return jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
     if (!httpOk) {
       return Promise.resolve({
@@ -100,8 +96,12 @@ describe('validateTransactionHash', () => {
 describe('inspectSorobanTransaction — SUCCESS status', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=SUCCESS and populates all core fields', async () => {
     global.fetch = buildMethodMock({
@@ -191,8 +191,12 @@ describe('inspectSorobanTransaction — SUCCESS status', () => {
 describe('inspectSorobanTransaction — contract events', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('extracts contract events with topics and data', async () => {
     global.fetch = buildMethodMock({
@@ -301,8 +305,12 @@ describe('inspectSorobanTransaction — contract events', () => {
 describe('inspectSorobanTransaction — resources and fees', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('parses resource usage fields', async () => {
     global.fetch = buildMethodMock({
@@ -426,8 +434,12 @@ describe('inspectSorobanTransaction — resources and fees', () => {
 describe('inspectSorobanTransaction — FAILED status', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('sets contractFailed=true and status=FAILED', async () => {
     global.fetch = buildMethodMock({
@@ -503,8 +515,12 @@ describe('inspectSorobanTransaction — FAILED status', () => {
 describe('inspectSorobanTransaction — PENDING status', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=PENDING with an informative error message', async () => {
     global.fetch = buildMethodMock({
@@ -529,8 +545,12 @@ describe('inspectSorobanTransaction — PENDING status', () => {
 describe('inspectSorobanTransaction — NOT_FOUND status', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=NOT_FOUND with an informative error message', async () => {
     global.fetch = buildMethodMock({
@@ -554,8 +574,12 @@ describe('inspectSorobanTransaction — NOT_FOUND status', () => {
 describe('inspectSorobanTransaction — network and RPC errors', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('returns status=UNKNOWN when fetch throws a network error', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
@@ -624,8 +648,12 @@ describe('inspectSorobanTransaction — network and RPC errors', () => {
 describe('inspectSorobanTransaction — JSON output shape', () => {
   let originalFetch: typeof fetch;
 
-  beforeAll(() => { originalFetch = global.fetch; });
-  afterAll(() => { global.fetch = originalFetch; });
+  beforeAll(() => {
+    originalFetch = global.fetch;
+  });
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
 
   it('result contains all top-level keys expected by the JSON envelope', async () => {
     global.fetch = buildMethodMock({

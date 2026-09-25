@@ -29,7 +29,10 @@ function buildMethodMock(handlers: Record<string, unknown>, httpOk = true, httpS
           Promise.resolve({
             jsonrpc: '2.0',
             id: 1,
-            error: { code: result.message === 'method-not-found' ? -32601 : -32000, message: result.message },
+            error: {
+              code: result.message === 'method-not-found' ? -32601 : -32000,
+              message: result.message,
+            },
           }),
       } as unknown as Response);
     }
@@ -413,8 +416,6 @@ describe('inspectRpcCapabilities — method probing', () => {
   });
 
   it('distinguishes method-not-found errors from other errors', async () => {
-    let callCount = 0;
-
     global.fetch = jest.fn().mockImplementation((_url: string, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string) as { method: string };
 
@@ -438,7 +439,6 @@ describe('inspectRpcCapabilities — method probing', () => {
         } as unknown as Response);
       }
 
-      callCount++;
       // All others succeed
       return Promise.resolve({
         ok: true,

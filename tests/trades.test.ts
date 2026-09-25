@@ -13,14 +13,16 @@ const COUNTER_ASSET = parseAsset(`USDC:${ISSUER}`).asset!;
 const HORIZON_URL = 'https://horizon-testnet.stellar.org';
 
 /** Build a minimal Horizon trade record for use in mock responses. */
-function makeHorizonTradeRecord(overrides: Partial<{
-  id: string;
-  ledger_close_time: string;
-  base_amount: string;
-  counter_amount: string;
-  price_n: number;
-  price_d: number;
-}> = {}) {
+function makeHorizonTradeRecord(
+  overrides: Partial<{
+    id: string;
+    ledger_close_time: string;
+    base_amount: string;
+    counter_amount: string;
+    price_n: number;
+    price_d: number;
+  }> = {},
+) {
   const {
     id = '1234567890-0',
     ledger_close_time = '2026-07-28T10:00:00Z',
@@ -320,8 +322,18 @@ describe('computeStats — summary statistics', () => {
 
   it('calculates stats correctly when called via fetchTrades', async () => {
     mockFetch([
-      makeHorizonTradeRecord({ base_amount: '100.0000000', counter_amount: '40.0000000', price_n: 4, price_d: 10 }),
-      makeHorizonTradeRecord({ base_amount: '200.0000000', counter_amount: '120.0000000', price_n: 6, price_d: 10 }),
+      makeHorizonTradeRecord({
+        base_amount: '100.0000000',
+        counter_amount: '40.0000000',
+        price_n: 4,
+        price_d: 10,
+      }),
+      makeHorizonTradeRecord({
+        base_amount: '200.0000000',
+        counter_amount: '120.0000000',
+        price_n: 6,
+        price_d: 10,
+      }),
     ]);
 
     const result = await fetchTrades({

@@ -177,11 +177,7 @@ function parseTradeRecord(record: HorizonTradeRecord): TradeRecord {
   };
 }
 
-function formatHorizonAssetLabel(
-  assetType: string,
-  code?: string,
-  issuer?: string,
-): string {
+function formatHorizonAssetLabel(assetType: string, code?: string, issuer?: string): string {
   if (assetType === 'native') return 'XLM';
   if (!code) return assetType;
   const issuerShort = issuer ? `${issuer.slice(0, 8)}...` : 'Unknown';
