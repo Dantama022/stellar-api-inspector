@@ -2799,31 +2799,552 @@ program
   );
 
 // ---------------------------------------------------------------------------
-// ISSUE-047: Muxed Account Address Inspection
+// ISSUE-050: Batch Inspection Command
 // ---------------------------------------------------------------------------
 program
-  .command('inspect-address <address>')
+  .command('batch')
   .description(
-    'Inspect a Stellar account address offline — distinguishes G... Ed25519 keys from M... muxed addresses',
+    'Run parallel read-only inspections on multiple accounts, contracts, transactions, or endpoints',
   )
-  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option(
+    '-f, --file <path>',
+    'Path to a targets file (one "type id [label]" per line, # for comments)',
+  )
+  .option(
+    '-t, --targets <items>',
+    'Inline targets as JSON array: \'[{"type":"account","id":"G..."}]\'',
+  )
+  .option('-h, --horizon <url>', 'Horizon URL for account inspections', 'https://horizon-testnet.stellar.org')
+  .option('-r, --rpc <url>', 'Soroban RPC URL for contract/soroban-tx inspections', 'https://soroban-testnet.stellar.org')
+  .option('-c, --concurrency <n>', 'Maximum parallel inspections (default: 5)', '5')
+  .option('-j, --json', 'Output raw JSON')
   .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
   .action(
-    async (address: string, options: { json?: boolean; output?: string }) => {
+    async (options: {
+      file?: string;
+      targets?: string;
+      horizon: string;
+      rpc: string;
+      concurrency: string;
+      json?: boolean;
+      output?: string;
+      verbose?: boolean;
+    }) => {
+      if (options.verbose) logger.setLevel('debug');
       if (options.json) logger.setJsonMode(true);
 
-      // Offline — no spinner needed; result is synchronous
-      const result = inspectMuxedAccount(address);
+      const { runBatchInspection, parseBatchTargets } = await import(
+        '../services/batch-inspector'
+      );
 
-      if (!result.isValid) {
-        if (options.json) {
-          outputJsonError(result.error ?? 'Invalid Stellar address');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let targets: any[] = [];
+
+      if (options.file) {
+        const fs2 = await import('fs');
+        if (!fs2.existsSync(options.file)) {
+          const msg = `Targets file not found: ${options.file}`;
+          if (options.json) outputJsonError(msg);
+          logger.error(msg);
+          process.exit(1);
         }
-        console.log(formatMuxedAccountReport(result));
+        const raw = fs2.readFileSync(options.file, 'utf8');
+        const parsed = parseBatchTargets(raw);
+        if (parsed.errors.length > 0) {
+          const msg = `Targets file parse errors:\n${parsed.errors.join('\n')}`;
+          if (options.json) outputJsonError(msg);
+          logger.error(msg);
+          process.exit(1);
+        }
+        targets = parsed.targets;
+      } else if (options.targets) {
+        try {
+          targets = JSON.parse(options.targets);
+        } catch {
+          const msg = 'Could not parse --targets JSON. Expected an array of {type, id, label?} objects.';
+          if (options.json) outputJsonError(msg);
+          logger.error(msg);
+          process.exit(1);
+        }
+      } else {
+        const msg = 'Provide targets via --file or --targets.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
         process.exit(1);
       }
 
-      writeResult(result, options, formatMuxedAccountReport(result));
+      if ((targets as unknown[]).length === 0) {
+        const msg = 'No targets to inspect.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const concurrency = Math.max(1, parseInt(options.concurrency, 10) || 5);
+      const spinner = makeSpinner(
+        `Running batch inspection on ${(targets as unknown[]).length} targets (concurrency: ${concurrency})...`,
+        !!options.json,
+      ).start();
+
+      const result = await runBatchInspection(targets as Parameters<typeof runBatchInspection>[0], {
+        horizonUrl: options.horizon,
+        rpcUrl: options.rpc,
+        concurrency,
+      });
+
+      if (result.failed > 0) {
+        spinner.fail(
+          `Batch complete: ${result.succeeded}/${result.totalTargets} succeeded, ${result.failed} failed (${result.totalDurationMs}ms)`,
+        );
+      } else {
+        spinner.succeed(
+          `Batch complete: ${result.succeeded}/${result.totalTargets} succeeded (${result.totalDurationMs}ms)`,
+        );
+      }
+
+      let text = `\n${chalk.bold.green('=== Batch Inspection Report ===')}\n\n`;
+      const summaryRows = [
+        ['Metric', 'Value'],
+        ['Total Targets', String(result.totalTargets)],
+        ['Succeeded', chalk.green(String(result.succeeded))],
+        ['Failed', result.failed > 0 ? chalk.red(String(result.failed)) : '0'],
+        ['Total Duration', `${result.totalDurationMs}ms`],
+      ];
+      text += formatTable(summaryRows);
+
+      text += `\n${chalk.bold.cyan('--- Results ---')}\n`;
+      const resultRows = [['#', 'Type', 'Label', 'Status', 'Duration', 'Detail']];
+      for (const [i, r] of result.results.entries()) {
+        const status = r.ok ? chalk.green('✓ OK') : chalk.red('✗ FAILED');
+        const detail = r.ok ? '' : (r.error ?? 'unknown error').slice(0, 60);
+        resultRows.push([
+          String(i + 1),
+          r.type,
+          r.label.slice(0, 40),
+          status,
+          `${r.durationMs}ms`,
+          detail,
+        ]);
+      }
+      text += formatTable(resultRows);
+
+      if (result.failed > 0) {
+        text += `\n${chalk.bold.yellow('--- Failed Targets ---')}\n`;
+        for (const r of result.results.filter((r) => !r.ok)) {
+          text += `${chalk.red('✗')} [${r.type}] ${r.label}\n  ${chalk.gray(r.error ?? 'unknown error')}\n`;
+        }
+        writeResult(result, options, text);
+        process.exit(1);
+      }
+
+      writeResult(result, options, text);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-051: Soroban Transaction Simulation Analysis Command
+// ---------------------------------------------------------------------------
+program
+  .command('simulate-tx <envelopeXdr>')
+  .description(
+    'Simulate a Soroban transaction envelope via RPC without broadcasting it; display resource and auth diagnostics',
+  )
+  .option('-r, --rpc <url>', 'Soroban RPC endpoint', 'https://soroban-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      envelopeXdr: string,
+      options: { rpc: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const { simulateSorobanTransaction, validateEnvelopeXdr } = await import(
+        '../services/soroban-simulate'
+      );
+
+      const xdrValidation = validateEnvelopeXdr(envelopeXdr);
+      if (!xdrValidation.valid) {
+        if (options.json) outputJsonError(xdrValidation.error!);
+        logger.error(xdrValidation.error!);
+        process.exit(1);
+      }
+
+      const rpcValidation = validateSorobanUrl(options.rpc);
+      if (!rpcValidation.valid) {
+        if (options.json) outputJsonError(rpcValidation.error!);
+        logger.error(rpcValidation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Simulating transaction via ${options.rpc}...`,
+        !!options.json,
+      ).start();
+
+      const result = await simulateSorobanTransaction({
+        rpcUrl: options.rpc,
+        envelopeXdr,
+      });
+
+      if (result.status === 'error' || result.status === 'unknown') {
+        spinner.fail(`Simulation failed: ${result.error ?? 'unknown error'}`);
+      } else {
+        spinner.succeed('Simulation complete.');
+      }
+
+      let text = `\n${chalk.bold.green('=== Soroban Transaction Simulation Analysis ===')}\n\n`;
+      const statusColor =
+        result.status === 'success'
+          ? chalk.green(result.status.toUpperCase())
+          : chalk.red(result.status.toUpperCase());
+
+      const overviewRows = [
+        ['Property', 'Value'],
+        ['RPC Endpoint', result.rpcUrl],
+        ['Simulation Status', statusColor],
+        ['Latency', `${result.latencyMs}ms`],
+        ['Latest Ledger', result.latestLedger !== undefined ? String(result.latestLedger) : 'N/A'],
+      ];
+      text += formatTable(overviewRows);
+
+      if (result.error) {
+        text += `\n${chalk.red('⚠ Error:')} ${result.error}\n`;
+      }
+
+      if (result.resources) {
+        text += `\n${chalk.bold.cyan('--- Recommended Resources & Fees ---')}\n`;
+        const resRows = [
+          ['Property', 'Value'],
+          ['Minimum Resource Fee', `${result.resources.minResourceFee} stroops`],
+        ];
+        if (result.resources.transactionDataXdr) {
+          resRows.push(['Transaction Data XDR', result.resources.transactionDataXdr.slice(0, 60) + '...']);
+        }
+        if (result.resources.restorePreamble) {
+          resRows.push(['Restore Preamble Fee', `${result.resources.restorePreamble.minResourceFee} stroops`]);
+        }
+        text += formatTable(resRows);
+      }
+
+      if (result.operationResults.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Operation Results (${result.operationResults.length}) ---`)}\n`;
+        for (const [i, op] of result.operationResults.entries()) {
+          text += `\n${chalk.yellow(`Operation #${i + 1}`)}\n`;
+          const opRows: string[][] = [['Field', 'Value']];
+          opRows.push(['Auth Entries Required', String(op.auth.length)]);
+          if (op.returnValueXdr) opRows.push(['Return Value XDR', op.returnValueXdr.slice(0, 60) + (op.returnValueXdr.length > 60 ? '...' : '')]);
+          text += formatTable(opRows);
+          if (op.auth.length > 0) {
+            text += chalk.gray(`  Authorization entries:\n`);
+            for (const [ai, a] of op.auth.entries()) {
+              text += chalk.gray(`    [${ai + 1}] ${a.slice(0, 80)}${a.length > 80 ? '...' : ''}\n`);
+            }
+          }
+        }
+      }
+
+      if (result.events.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Events (${result.events.length}) ---`)}\n`;
+        for (const [i, ev] of result.events.entries()) {
+          text += `${chalk.yellow(`#${i + 1}`)} [${ev.type}]`;
+          if (ev.contractId) text += ` ${chalk.gray(ev.contractId)}`;
+          text += '\n';
+          if (ev.topics.length > 0) {
+            const evRows = [['Field', 'Value'], ['Topics', ev.topics.join(', ')]];
+            if (ev.value) evRows.push(['Value', ev.value]);
+            text += formatTable(evRows);
+          }
+        }
+      } else {
+        text += `\n${chalk.gray('No events emitted during simulation.')}\n`;
+      }
+
+      if (result.stateChanges.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- State Changes (${result.stateChanges.length}) ---`)}\n`;
+        const scRows = [['#', 'Type', 'Key (truncated)']];
+        for (const [i, sc] of result.stateChanges.entries()) {
+          scRows.push([String(i + 1), sc.type, sc.key.slice(0, 50)]);
+        }
+        text += formatTable(scRows);
+      }
+
+      if (result.warnings.length > 0) {
+        text += `\n`;
+        for (const w of result.warnings) {
+          text += `${chalk.yellow('⚠')} ${w}\n`;
+        }
+      }
+
+      writeResult(result, options, text);
+      if (result.status === 'error' || result.status === 'unknown') process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-052: Cross-Endpoint Network Consistency Audit Command
+// ---------------------------------------------------------------------------
+program
+  .command('consistency-audit')
+  .description(
+    'Compare Horizon and Soroban RPC endpoints for network passphrase, protocol, and ledger consistency',
+  )
+  .option(
+    '-H, --horizon <urls>',
+    'Comma-separated Horizon endpoint URLs',
+  )
+  .option(
+    '-r, --rpc <urls>',
+    'Comma-separated Soroban RPC endpoint URLs',
+  )
+  .option('--lag-threshold <n>', 'Ledger lag threshold before flagging a warning (default: 3)', '3')
+  .option('--timeout <ms>', 'Request timeout in milliseconds (default: 15000)', '15000')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (options: {
+      horizon?: string;
+      rpc?: string;
+      lagThreshold: string;
+      timeout: string;
+      json?: boolean;
+      output?: string;
+      verbose?: boolean;
+    }) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const { auditNetworkConsistency } = await import('../services/consistency-audit');
+
+      const horizonUrls = options.horizon
+        ? options.horizon.split(',').map((u) => u.trim()).filter(Boolean)
+        : [];
+      const rpcUrls = options.rpc
+        ? options.rpc.split(',').map((u) => u.trim()).filter(Boolean)
+        : [];
+
+      if (horizonUrls.length + rpcUrls.length < 1) {
+        const msg = 'Provide at least one endpoint via --horizon or --rpc.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      if (horizonUrls.length + rpcUrls.length < 2) {
+        const msg = 'Provide at least two endpoints total to perform a consistency comparison.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const lagThreshold = parseInt(options.lagThreshold, 10) || 3;
+      const timeoutMs = parseInt(options.timeout, 10) || 15_000;
+
+      const total = horizonUrls.length + rpcUrls.length;
+      const spinner = makeSpinner(
+        `Auditing ${total} endpoint${total > 1 ? 's' : ''} for network consistency...`,
+        !!options.json,
+      ).start();
+
+      const result = await auditNetworkConsistency({
+        horizonUrls,
+        rpcUrls,
+        lagWarningThreshold: lagThreshold,
+        timeoutMs,
+      });
+
+      if (result.consistent) {
+        spinner.succeed('Consistency audit complete — all endpoints consistent.');
+      } else {
+        spinner.fail('Consistency audit complete — inconsistencies detected.');
+      }
+
+      const consistencyLabel = result.consistent
+        ? chalk.green('✓ CONSISTENT')
+        : chalk.red('✗ INCONSISTENT');
+
+      let text = `\n${chalk.bold.green('=== Cross-Endpoint Network Consistency Audit ===')}\n\n`;
+      const overviewRows = [
+        ['Property', 'Value'],
+        ['Overall Result', consistencyLabel],
+        ['Endpoints Checked', String(result.endpoints.length)],
+        ['Audited At', result.auditedAt],
+        ['Max Ledger Lag', result.maxLedgerLag !== undefined ? String(result.maxLedgerLag) : 'N/A'],
+      ];
+      text += formatTable(overviewRows);
+
+      text += `\n${chalk.bold.cyan('--- Endpoint Snapshots ---')}\n`;
+      const epRows = [['URL', 'Type', 'Status', 'Latency', 'Network', 'Protocol', 'Ledger']];
+      for (const ep of result.endpoints) {
+        const status = ep.reachable ? chalk.green('ONLINE') : chalk.red('OFFLINE');
+        epRows.push([
+          ep.url.length > 45 ? ep.url.slice(0, 42) + '...' : ep.url,
+          ep.type,
+          status,
+          `${ep.latencyMs}ms`,
+          ep.networkPassphrase
+            ? ep.networkPassphrase.length > 30
+              ? ep.networkPassphrase.slice(0, 27) + '...'
+              : ep.networkPassphrase
+            : 'N/A',
+          ep.protocolVersion !== undefined ? String(ep.protocolVersion) : 'N/A',
+          ep.latestLedger !== undefined ? String(ep.latestLedger) : 'N/A',
+        ]);
+      }
+      text += formatTable(epRows);
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'critical'
+              ? chalk.red('✗')
+              : f.severity === 'warning'
+              ? chalk.yellow('⚠')
+              : chalk.blue('ℹ');
+          text += `${icon} [${f.severity.toUpperCase()}] ${f.field}: ${f.message}\n`;
+          for (const [url, value] of Object.entries(f.values)) {
+            text += `    ${chalk.gray(url)}: ${value}\n`;
+          }
+        }
+      } else {
+        text += `\n${chalk.green('No findings — all checked fields are consistent.')}\n`;
+      }
+
+      writeResult(result, options, text);
+      if (!result.consistent) process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-053: Soroban Contract Storage TTL Audit Command
+// ---------------------------------------------------------------------------
+program
+  .command('ttl-audit <contractId>')
+  .description(
+    'Audit Soroban contract instance, code, and data entry TTLs; flag entries expiring soon or already expired',
+  )
+  .option('-r, --rpc <url>', 'Soroban RPC endpoint', 'https://soroban-testnet.stellar.org')
+  .option(
+    '--keys <xdrKeys>',
+    'Comma-separated base64 ledger key XDRs for additional contract-data entries',
+  )
+  .option(
+    '--ttl-warning-ledgers <n>',
+    'Ledgers-remaining threshold for "expiring soon" warnings (default: 17280)',
+    '17280',
+  )
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      contractId: string,
+      options: {
+        rpc: string;
+        keys?: string;
+        ttlWarningLedgers: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const { auditContractStorageTtl } = await import('../services/storage-ttl-audit');
+
+      const rpcValidation = validateSorobanUrl(options.rpc);
+      if (!rpcValidation.valid) {
+        if (options.json) outputJsonError(rpcValidation.error!);
+        logger.error(rpcValidation.error!);
+        process.exit(1);
+      }
+
+      const ttlWarningLedgers = parseInt(options.ttlWarningLedgers, 10) || 17280;
+      const additionalKeys = options.keys
+        ? options.keys.split(',').map((k) => k.trim()).filter(Boolean)
+        : [];
+
+      const spinner = makeSpinner(
+        `Auditing storage TTLs for contract ${contractId}...`,
+        !!options.json,
+      ).start();
+
+      let result;
+      try {
+        result = await auditContractStorageTtl({
+          rpcUrl: options.rpc,
+          contractId,
+          additionalKeys: additionalKeys.length > 0 ? additionalKeys : undefined,
+          ttlWarningLedgers,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (result.attentionRequired.length > 0) {
+        spinner.fail(
+          `TTL audit complete — ${result.attentionRequired.length} entr${result.attentionRequired.length === 1 ? 'y requires' : 'ies require'} attention.`,
+        );
+      } else {
+        spinner.succeed('TTL audit complete — all entries healthy.');
+      }
+
+      let text = `\n${chalk.bold.green('=== Soroban Contract Storage TTL Audit ===')}\n\n`;
+      const overviewRows = [
+        ['Property', 'Value'],
+        ['Contract ID', result.contractId],
+        ['RPC Endpoint', result.rpcUrl],
+        ['Current Ledger', result.currentLedger !== undefined ? String(result.currentLedger) : 'Unknown'],
+        ['WASM Hash', result.wasmHash ?? 'N/A'],
+        ['Entries Audited', String(result.entries.length)],
+        ['Requiring Attention', result.attentionRequired.length > 0
+          ? chalk.red(String(result.attentionRequired.length))
+          : chalk.green('0')],
+      ];
+      text += formatTable(overviewRows);
+
+      text += `\n${chalk.bold.cyan('--- Entry TTL Details ---')}\n`;
+      const entryRows = [['Type', 'Label', 'Found', 'Live Until', 'Remaining', 'Status']];
+      for (const entry of result.entries) {
+        const foundStr = entry.found ? chalk.green('YES') : chalk.red('NO');
+        const statusStr =
+          entry.status === 'healthy'
+            ? chalk.green('HEALTHY')
+            : entry.status === 'expiring-soon'
+            ? chalk.yellow('EXPIRING SOON')
+            : entry.status === 'expired'
+            ? chalk.red('EXPIRED')
+            : chalk.gray('UNKNOWN');
+        entryRows.push([
+          entry.type,
+          entry.label.slice(0, 38),
+          foundStr,
+          entry.liveUntilLedger !== undefined ? String(entry.liveUntilLedger) : 'N/A',
+          entry.remainingLedgers !== undefined ? String(entry.remainingLedgers) : 'N/A',
+          statusStr,
+        ]);
+      }
+      text += formatTable(entryRows);
+
+      if (result.warnings.length > 0) {
+        text += '\n';
+        for (const w of result.warnings) {
+          text += `${chalk.yellow('⚠')} ${w}\n`;
+        }
+      }
+
+      writeResult(result, options, text);
+      if (result.attentionRequired.length > 0) process.exit(1);
     },
   );
 
