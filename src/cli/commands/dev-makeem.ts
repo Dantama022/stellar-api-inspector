@@ -7,6 +7,8 @@ import { auditPaymentDestinationReadiness } from '../../services/payment-destina
 import { formatPaymentDestinationReadinessReport } from '../../output/payment-destination-readiness-report';
 import { auditOperationSources } from '../../services/operation-source-auth-audit';
 import { formatOperationSourceAuditReport } from '../../output/operation-source-auth-report';
+import { reportIssuerConcentration, parsePriceList } from '../../services/issuer-concentration-report';
+import { formatIssuerConcentrationReport } from '../../output/issuer-concentration-report';
 
 function emit(data: unknown, options: { json?: boolean; output?: string }, text: string): void {
   const out = options.json ? JSON.stringify({ ok: true, data }, null, 2) : text;
@@ -105,6 +107,37 @@ export function registerDevMakeemCommands(program: Command): void {
           networkPassphrase: options.passphrase,
         });
         emit(report, options, formatOperationSourceAuditReport(report));
+        if (report.status === 'failed') process.exit(1);
+      },
+    );
+
+  program
+    .command('issuer-concentration <accountId>')
+    .description('Read-only report of an account\'s issued-asset exposure grouped by issuer')
+    .option('--horizon <url>', 'Horizon URL', 'https://horizon-testnet.stellar.org')
+    .option('--currency <code>', 'Valuation currency for supplied prices')
+    .option('--prices <list>', 'Comma-separated prices: CODE:ISSUER=PRICE,native=PRICE')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        accountId: string,
+        options: { horizon: string; currency?: string; prices?: string; json?: boolean; output?: string },
+      ) => {
+        let valuation;
+        if (options.prices) {
+          try {
+            valuation = { currency: options.currency ?? '', prices: parsePriceList(options.prices) };
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err), options.json);
+          }
+        }
+        const report = await reportIssuerConcentration({
+          accountId,
+          horizonUrl: options.horizon,
+          valuation,
+        });
+        emit(report, options, formatIssuerConcentrationReport(report));
         if (report.status === 'failed') process.exit(1);
       },
     );
