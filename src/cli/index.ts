@@ -69,6 +69,7 @@ import {
 } from '../services/route-effects-data';
 import { runInteractiveMode } from '../prompts/main-menu';
 import { inspectTls } from '../services/tls-inspector';
+import { registerDevMakeemCommands } from './commands/dev-makeem';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
@@ -1687,6 +1688,8 @@ program
       writeResult(result, options, text);
     },
   );
+
+registerDevMakeemCommands(program);
 
 // ---------------------------------------------------------------------------
 // 8. Order Book Inspector
