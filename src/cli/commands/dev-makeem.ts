@@ -3,6 +3,8 @@ import fs from 'fs';
 import { outputJsonError } from '../../output/json';
 import { auditSorobanNetworkCompatibility } from '../../services/soroban-network-compat-audit';
 import { formatSorobanNetworkCompatReport } from '../../output/soroban-network-compat-report';
+import { auditPaymentDestinationReadiness } from '../../services/payment-destination-readiness';
+import { formatPaymentDestinationReadinessReport } from '../../output/payment-destination-readiness-report';
 
 function emit(data: unknown, options: { json?: boolean; output?: string }, text: string): void {
   const out = options.json ? JSON.stringify({ ok: true, data }, null, 2) : text;
@@ -53,6 +55,30 @@ export function registerDevMakeemCommands(program: Command): void {
           minProtocolVersion,
         });
         emit(report, options, formatSorobanNetworkCompatReport(report));
+        if (report.status === 'failed') process.exit(1);
+      },
+    );
+
+  program
+    .command('payment-destination-readiness <destination>')
+    .description('Read-only audit of whether a destination account can receive a proposed payment')
+    .option('--asset <asset>', 'Proposed asset: native or CODE:ISSUER')
+    .option('--amount <amount>', 'Proposed amount')
+    .option('--horizon <url>', 'Horizon URL', 'https://horizon-testnet.stellar.org')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        destination: string,
+        options: { asset?: string; amount?: string; horizon: string; json?: boolean; output?: string },
+      ) => {
+        const report = await auditPaymentDestinationReadiness({
+          destination,
+          asset: options.asset,
+          amount: options.amount,
+          horizonUrl: options.horizon,
+        });
+        emit(report, options, formatPaymentDestinationReadinessReport(report));
         if (report.status === 'failed') process.exit(1);
       },
     );
