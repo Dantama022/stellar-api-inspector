@@ -39,6 +39,7 @@ import {
 import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
+import { registerRdjSavyyCommands } from './commands/rdj-savyy';
 import { validateHorizonUrl } from '../utils/urls';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
@@ -315,6 +316,8 @@ program
 // ---------------------------------------------------------------------------
 // 2. Soroban RPC Checker
 // ---------------------------------------------------------------------------
+registerRdjSavyyCommands(program);
+
 program
   .command('soroban <url>')
   .description('Inspect Soroban RPC health, network configuration, and ledger status')
