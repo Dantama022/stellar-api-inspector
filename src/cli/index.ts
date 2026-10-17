@@ -40,6 +40,7 @@ import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { validateHorizonUrl } from '../utils/urls';
+import { registerFreezyyyArchCommands } from './commands/freezyyy-arch';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
@@ -782,6 +783,8 @@ program
       writeResult(report, options, formatAccountMergeAudit(report));
     },
   );
+
+registerFreezyyyArchCommands(program);
 
 program
   .command('account-offers <accountId>')
