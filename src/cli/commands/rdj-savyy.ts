@@ -14,6 +14,8 @@ import {
   validateThresholds,
 } from '../../services/trustline-limit-utilization';
 import { formatTrustlineLimitUtilization } from '../../output/trustline-limit-utilization';
+import { auditTimeBounds } from '../../services/time-bounds-readiness';
+import { formatTimeBoundsReadiness } from '../../output/time-bounds-readiness';
 
 function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
@@ -160,6 +162,30 @@ export function registerRdjSavyyCommands(program: Command): void {
         if (report.status === 'failed') return fail(spinner, report.findings[0].message, options);
         spinner.succeed('Trustline utilization report complete.');
         writeResult(report, options, formatTrustlineLimitUtilization(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Transaction Time-Bounds and Ledger-Window Readiness Audit
+  // -------------------------------------------------------------------------
+  program
+    .command('time-bounds-readiness <envelopeXdrOrHash>')
+    .description('Check transaction time bounds against the latest ledger close time (read-only)')
+    .option('--passphrase <passphrase>', 'Network passphrase used to decode the envelope')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        input: string,
+        options: { passphrase?: string; horizon: string; json?: boolean; output?: string },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Auditing time bounds...', !!options.json).start();
+        const report = await auditTimeBounds(input, options.horizon, { passphrase: options.passphrase });
+        if (report.status === 'failed') return fail(spinner, report.findings[0], options);
+        spinner.succeed('Time-bounds readiness audit complete.');
+        writeResult(report, options, formatTimeBoundsReadiness(report));
       },
     );
 }
