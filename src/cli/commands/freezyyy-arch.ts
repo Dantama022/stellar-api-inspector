@@ -9,6 +9,11 @@ import {
   verifyLedgerInclusion,
 } from '../../services/tx-ledger-inclusion';
 import { formatLedgerInclusionReport } from '../../output/tx-ledger-inclusion-report';
+import {
+  auditSequenceQueue,
+  validateSequenceQueueAccount,
+} from '../../services/sequence-queue-audit';
+import { formatSequenceQueueReport } from '../../output/sequence-queue-report';
 
 interface CommonOptions {
   horizon: string;
@@ -62,4 +67,48 @@ export function registerFreezyyyArchCommands(program: Command): void {
         fail(err instanceof Error ? err.message : String(err), options, spinner);
       }
     });
+
+  program
+    .command('sequence-queue <accountId> [envelopes...]')
+    .description('Read-only audit of account sequence gaps and conflicts across supplied envelopes')
+    .option('-f, --file <path>', 'File with one base64 envelope XDR per line')
+    .option('-n, --network-passphrase <passphrase>', 'Network passphrase used to decode envelopes')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', DEFAULT_HORIZON)
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        accountId: string,
+        envelopes: string[],
+        options: CommonOptions & { file?: string; networkPassphrase?: string },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const validation = validateSequenceQueueAccount(accountId);
+        if (!validation.valid) fail(validation.error as string, options);
+        const inputs = [...envelopes];
+        if (options.file) {
+          try {
+            inputs.push(
+              ...fs
+                .readFileSync(options.file, 'utf8')
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .filter(Boolean),
+            );
+          } catch (err) {
+            fail(`Could not read ${options.file}: ${err instanceof Error ? err.message : err}`, options);
+          }
+        }
+        const spinner = startSpinner('Auditing sequence queue...', !!options.json);
+        try {
+          const report = await auditSequenceQueue(options.horizon, accountId, inputs, {
+            networkPassphrase: options.networkPassphrase,
+          });
+          spinner.succeed('Sequence queue audit complete.');
+          emit(report, options, formatSequenceQueueReport(report));
+        } catch (err: unknown) {
+          fail(err instanceof Error ? err.message : String(err), options, spinner);
+        }
+      },
+    );
 }
