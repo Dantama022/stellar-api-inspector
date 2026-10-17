@@ -13,6 +13,12 @@ import {
   diffDataSnapshots,
 } from '../../services/account-data-snapshot-diff';
 import { formatAccountDataSnapshotDiff } from '../../output/account-data-snapshot-diff';
+import {
+  compareBalanceSnapshots,
+  fetchBalanceSnapshot,
+  parseBalanceSnapshot,
+} from '../../services/account-balance-snapshot';
+import { formatAccountBalanceComparison } from '../../output/account-balance-snapshot';
 
 const noopSpinner = {
   succeed: (_msg?: string) => undefined,
@@ -143,6 +149,70 @@ export function registerValreb001Commands(program: Command): void {
           : await compareAccountDataEntries(options.horizon, accountId, raw, options.network ?? null);
         spinner.succeed('Account data comparison complete.');
         writeResult(report, options, formatAccountDataSnapshotDiff(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Account Balance Snapshot Export and Comparison
+  // -------------------------------------------------------------------------
+  program
+    .command('account-balance-snapshot <accountId> [snapshotFile]')
+    .description('Export an account balance snapshot and compare it with a saved one (read-only)')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('--network <label>', 'Network label recorded in and compared with snapshots')
+    .option('--export <path>', 'Write the current balance snapshot to this file')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        accountId: string,
+        snapshotFile: string | undefined,
+        options: { horizon: string; network?: string; export?: string; json?: boolean; output?: string },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Fetching account balances...', !!options.json).start();
+        const current = await fetchBalanceSnapshot(options.horizon, accountId, options.network ?? null);
+        if (!current.snapshot) {
+          spinner.fail('Balance snapshot retrieval failed.');
+          if (options.json) outputJsonError(current.error);
+          logger.error(current.error);
+          process.exit(1);
+          return;
+        }
+        if (options.export) {
+          fs.writeFileSync(options.export, JSON.stringify(current.snapshot, null, 2), 'utf8');
+        }
+        if (!snapshotFile) {
+          spinner.succeed('Balance snapshot captured.');
+          writeResult(
+            current.snapshot,
+            options,
+            `Captured ${current.snapshot.balances.length} balances for ${accountId}.`,
+          );
+          return;
+        }
+        let raw: string;
+        try {
+          raw = fs.readFileSync(snapshotFile, 'utf8');
+        } catch (err: unknown) {
+          const message = `Unable to read snapshot: ${err instanceof Error ? err.message : String(err)}`;
+          spinner.fail(message);
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+          return;
+        }
+        const parsed = parseBalanceSnapshot(raw);
+        if (!parsed.snapshot) {
+          spinner.fail(parsed.error);
+          if (options.json) outputJsonError(parsed.error);
+          logger.error(parsed.error);
+          process.exit(1);
+          return;
+        }
+        const report = compareBalanceSnapshots(parsed.snapshot, current.snapshot);
+        spinner.succeed('Balance snapshot comparison complete.');
+        writeResult(report, options, formatAccountBalanceComparison(report));
       },
     );
 }
