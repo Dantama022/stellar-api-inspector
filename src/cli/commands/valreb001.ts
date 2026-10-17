@@ -6,6 +6,13 @@ import { logger } from '../../utils/logger';
 import { outputJsonError } from '../../output/json';
 import { auditNetworkPassphraseSignatures } from '../../services/network-passphrase-signature-audit';
 import { formatNetworkPassphraseSignatureAudit } from '../../output/network-passphrase-signature-audit';
+import {
+  compareAccountDataEntries,
+  fetchDataSnapshot,
+  parseDataSnapshot,
+  diffDataSnapshots,
+} from '../../services/account-data-snapshot-diff';
+import { formatAccountDataSnapshotDiff } from '../../output/account-data-snapshot-diff';
 
 const noopSpinner = {
   succeed: (_msg?: string) => undefined,
@@ -77,6 +84,65 @@ export function registerValreb001Commands(program: Command): void {
         }
         spinner.succeed('Network passphrase audit complete.');
         writeResult(report, options, formatNetworkPassphraseSignatureAudit(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Account Data Entry Snapshot Diff
+  // -------------------------------------------------------------------------
+  program
+    .command('account-data-diff <accountId> [snapshotFile]')
+    .description('Compare current account data entries with a saved snapshot (read-only)')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('--network <label>', 'Network label recorded in and compared with snapshots')
+    .option('--export <path>', 'Write the current data-entry snapshot to this file')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        accountId: string,
+        snapshotFile: string | undefined,
+        options: { horizon: string; network?: string; export?: string; json?: boolean; output?: string },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Fetching account data entries...', !!options.json).start();
+        const current = await fetchDataSnapshot(options.horizon, accountId, options.network ?? null);
+        if (!current.snapshot) {
+          spinner.fail('Account data retrieval failed.');
+          if (options.json) outputJsonError(current.error);
+          logger.error(current.error);
+          process.exit(1);
+          return;
+        }
+        if (options.export) {
+          fs.writeFileSync(options.export, JSON.stringify(current.snapshot, null, 2), 'utf8');
+        }
+        if (!snapshotFile) {
+          spinner.succeed('Account data snapshot captured.');
+          writeResult(
+            current.snapshot,
+            options,
+            `Captured ${Object.keys(current.snapshot.entries).length} data entries for ${accountId}.`,
+          );
+          return;
+        }
+        let raw: string;
+        try {
+          raw = fs.readFileSync(snapshotFile, 'utf8');
+        } catch (err: unknown) {
+          const message = `Unable to read snapshot: ${err instanceof Error ? err.message : String(err)}`;
+          spinner.fail(message);
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+          return;
+        }
+        const parsed = parseDataSnapshot(raw);
+        const report = parsed.snapshot
+          ? diffDataSnapshots(parsed.snapshot, current.snapshot)
+          : await compareAccountDataEntries(options.horizon, accountId, raw, options.network ?? null);
+        spinner.succeed('Account data comparison complete.');
+        writeResult(report, options, formatAccountDataSnapshotDiff(report));
       },
     );
 }
