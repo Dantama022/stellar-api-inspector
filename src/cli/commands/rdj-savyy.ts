@@ -8,6 +8,12 @@ import { compareSimulationInputs } from '../../services/soroban-simulation-diff'
 import { formatSorobanSimulationDiff } from '../../output/soroban-simulation-diff';
 import { auditMemosByAccount, auditMemosByHashes } from '../../services/memo-reference-uniqueness-audit';
 import { formatMemoReferenceUniquenessAudit } from '../../output/memo-reference-uniqueness-audit';
+import {
+  DEFAULT_THRESHOLDS,
+  fetchTrustlineUtilization,
+  validateThresholds,
+} from '../../services/trustline-limit-utilization';
+import { formatTrustlineLimitUtilization } from '../../output/trustline-limit-utilization';
 
 function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
@@ -126,6 +132,34 @@ export function registerRdjSavyyCommands(program: Command): void {
         if (report.status === 'failed') return fail(spinner, report.findings.join(' '), options);
         spinner.succeed('Memo uniqueness audit complete.');
         writeResult(report, options, formatMemoReferenceUniquenessAudit(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Trustline Limit Utilization and Capacity Report
+  // -------------------------------------------------------------------------
+  program
+    .command('trustline-utilization <accountId>')
+    .description('Report trustline limit utilization and remaining capacity (read-only)')
+    .option('--warn <pct>', 'Warning utilization threshold percent', String(DEFAULT_THRESHOLDS.warning))
+    .option('--high <pct>', 'High utilization threshold percent', String(DEFAULT_THRESHOLDS.high))
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        accountId: string,
+        options: { warn: string; high: string; horizon: string; json?: boolean; output?: string },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Fetching trustlines...', !!options.json).start();
+        const thresholds = { warning: Number(options.warn), high: Number(options.high) };
+        const invalid = validateThresholds(thresholds);
+        if (invalid) return fail(spinner, invalid, options);
+        const report = await fetchTrustlineUtilization(options.horizon, accountId, thresholds);
+        if (report.status === 'failed') return fail(spinner, report.findings[0].message, options);
+        spinner.succeed('Trustline utilization report complete.');
+        writeResult(report, options, formatTrustlineLimitUtilization(report));
       },
     );
 }
