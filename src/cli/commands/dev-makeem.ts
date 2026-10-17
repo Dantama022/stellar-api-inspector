@@ -5,6 +5,8 @@ import { auditSorobanNetworkCompatibility } from '../../services/soroban-network
 import { formatSorobanNetworkCompatReport } from '../../output/soroban-network-compat-report';
 import { auditPaymentDestinationReadiness } from '../../services/payment-destination-readiness';
 import { formatPaymentDestinationReadinessReport } from '../../output/payment-destination-readiness-report';
+import { auditOperationSources } from '../../services/operation-source-auth-audit';
+import { formatOperationSourceAuditReport } from '../../output/operation-source-auth-report';
 
 function emit(data: unknown, options: { json?: boolean; output?: string }, text: string): void {
   const out = options.json ? JSON.stringify({ ok: true, data }, null, 2) : text;
@@ -79,6 +81,30 @@ export function registerDevMakeemCommands(program: Command): void {
           horizonUrl: options.horizon,
         });
         emit(report, options, formatPaymentDestinationReadinessReport(report));
+        if (report.status === 'failed') process.exit(1);
+      },
+    );
+
+  program
+    .command('operation-source-audit <hashOrXdr>')
+    .description('Read-only audit of operation source accounts and authorization context in a transaction')
+    .option('--horizon <url>', 'Horizon URL', 'https://horizon-testnet.stellar.org')
+    .option('--passphrase <passphrase>', 'Network passphrase', 'Test SDF Network ; September 2015')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        hashOrXdr: string,
+        options: { horizon: string; passphrase: string; json?: boolean; output?: string },
+      ) => {
+        const isHash = /^[0-9a-fA-F]{64}$/.test(hashOrXdr);
+        const report = await auditOperationSources({
+          xdr: isHash ? undefined : hashOrXdr,
+          hash: isHash ? hashOrXdr : undefined,
+          horizonUrl: options.horizon,
+          networkPassphrase: options.passphrase,
+        });
+        emit(report, options, formatOperationSourceAuditReport(report));
         if (report.status === 'failed') process.exit(1);
       },
     );
