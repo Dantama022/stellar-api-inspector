@@ -19,6 +19,8 @@ import {
   parseBalanceSnapshot,
 } from '../../services/account-balance-snapshot';
 import { formatAccountBalanceComparison } from '../../output/account-balance-snapshot';
+import { inspectOperationSupport } from '../../services/operation-support-matrix';
+import { formatOperationSupportMatrix } from '../../output/operation-support-matrix';
 
 const noopSpinner = {
   succeed: (_msg?: string) => undefined,
@@ -213,6 +215,46 @@ export function registerValreb001Commands(program: Command): void {
         const report = compareBalanceSnapshots(parsed.snapshot, current.snapshot);
         spinner.succeed('Balance snapshot comparison complete.');
         writeResult(report, options, formatAccountBalanceComparison(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Transaction Operation Support Matrix by Protocol Version
+  // -------------------------------------------------------------------------
+  program
+    .command('operation-support <hashOrEnvelopeXdr>')
+    .description('Read-only operation compatibility report by Stellar protocol version')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('--network-passphrase <passphrase>', 'Network passphrase used to decode the envelope')
+    .option('--historical', 'Do not judge operations against the current protocol version')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        input: string,
+        options: {
+          horizon: string;
+          networkPassphrase?: string;
+          historical?: boolean;
+          json?: boolean;
+          output?: string;
+        },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Inspecting transaction operations...', !!options.json).start();
+        const report = await inspectOperationSupport(options.horizon, input, {
+          networkPassphrase: options.networkPassphrase,
+          historical: options.historical,
+        });
+        if (report.status === 'failed') {
+          spinner.fail('Operation support report failed.');
+          if (options.json) outputJsonError(report.findings[0]);
+          logger.error(report.findings[0]);
+          process.exit(1);
+          return;
+        }
+        spinner.succeed('Operation support report complete.');
+        writeResult(report, options, formatOperationSupportMatrix(report));
       },
     );
 }
