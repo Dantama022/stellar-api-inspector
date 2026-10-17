@@ -6,6 +6,12 @@ import { logger } from '../../utils/logger';
 import { outputJsonError } from '../../output/json';
 import { compareSimulationInputs } from '../../services/soroban-simulation-diff';
 import { formatSorobanSimulationDiff } from '../../output/soroban-simulation-diff';
+import { auditMemosByAccount, auditMemosByHashes } from '../../services/memo-reference-uniqueness-audit';
+import { formatMemoReferenceUniquenessAudit } from '../../output/memo-reference-uniqueness-audit';
+
+function collect(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
+}
 
 const noopSpinner = {
   succeed: (_msg?: string) => undefined,
@@ -78,6 +84,48 @@ export function registerRdjSavyyCommands(program: Command): void {
         if (!('differences' in report)) return fail(spinner, report.error, options);
         spinner.succeed('Simulation comparison complete.');
         writeResult(report, options, formatSorobanSimulationDiff(report));
+      },
+    );
+
+  // -------------------------------------------------------------------------
+  // Transaction Memo and Payment Reference Uniqueness Audit
+  // -------------------------------------------------------------------------
+  program
+    .command('memo-uniqueness-audit [hashes...]')
+    .description('Audit memos and payment references for repeats in selected transactions (read-only)')
+    .option('--account <id>', 'Audit recent transactions of this account instead of hashes')
+    .option('--max-pages <n>', 'Maximum Horizon pages to fetch for --account', '5')
+    .option('--expect <reference>', 'Expected payment reference (repeatable)', collect, [])
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        hashes: string[],
+        options: {
+          account?: string;
+          maxPages: string;
+          expect: string[];
+          horizon: string;
+          json?: boolean;
+          output?: string;
+        },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner('Auditing memos...', !!options.json).start();
+        const maxPages = parseInt(options.maxPages, 10);
+        if (!options.account && hashes.length === 0) {
+          return fail(spinner, 'Provide transaction hashes or --account <id>.', options);
+        }
+        if (!Number.isInteger(maxPages) || maxPages < 1) {
+          return fail(spinner, '--max-pages must be a positive integer.', options);
+        }
+        const report = options.account
+          ? await auditMemosByAccount(options.horizon, options.account, { maxPages, expected: options.expect })
+          : await auditMemosByHashes(options.horizon, hashes, options.expect);
+        if (report.status === 'failed') return fail(spinner, report.findings.join(' '), options);
+        spinner.succeed('Memo uniqueness audit complete.');
+        writeResult(report, options, formatMemoReferenceUniquenessAudit(report));
       },
     );
 }
