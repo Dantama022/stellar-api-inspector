@@ -14,6 +14,8 @@ import {
   validateSequenceQueueAccount,
 } from '../../services/sequence-queue-audit';
 import { formatSequenceQueueReport } from '../../output/sequence-queue-report';
+import { auditLiquidityPool, validatePoolId } from '../../services/liquidity-pool-consistency-audit';
+import { formatPoolAuditReport } from '../../output/liquidity-pool-audit-report';
 
 interface CommonOptions {
   horizon: string;
@@ -111,4 +113,27 @@ export function registerFreezyyyArchCommands(program: Command): void {
         }
       },
     );
+
+  program
+    .command('pool-audit <poolId>')
+    .description('Read-only consistency audit of a liquidity pool (assets, reserves, fee, share supply)')
+    .option('--max-pages <count>', 'Maximum trustline pages for share-supply reconciliation', '10')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', DEFAULT_HORIZON)
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(async (poolId: string, options: CommonOptions & { maxPages: string }) => {
+      if (options.json) logger.setJsonMode(true);
+      const validation = validatePoolId(poolId);
+      const maxPages = Number.parseInt(options.maxPages, 10);
+      if (!validation.valid) fail(validation.error as string, options);
+      if (!Number.isInteger(maxPages) || maxPages < 1) fail('--max-pages must be a positive integer', options);
+      const spinner = startSpinner('Auditing liquidity pool...', !!options.json);
+      try {
+        const report = await auditLiquidityPool(options.horizon, poolId, { maxPages });
+        spinner.succeed('Liquidity pool audit complete.');
+        emit(report, options, formatPoolAuditReport(report));
+      } catch (err: unknown) {
+        fail(err instanceof Error ? err.message : String(err), options, spinner);
+      }
+    });
 }
