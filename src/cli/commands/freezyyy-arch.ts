@@ -16,6 +16,8 @@ import {
 import { formatSequenceQueueReport } from '../../output/sequence-queue-report';
 import { auditLiquidityPool, validatePoolId } from '../../services/liquidity-pool-consistency-audit';
 import { formatPoolAuditReport } from '../../output/liquidity-pool-audit-report';
+import { reconcileAssetFlow } from '../../services/asset-flow-reconciliation';
+import { formatAssetFlowReport } from '../../output/asset-flow-report';
 
 interface CommonOptions {
   horizon: string;
@@ -132,6 +134,33 @@ export function registerFreezyyyArchCommands(program: Command): void {
         const report = await auditLiquidityPool(options.horizon, poolId, { maxPages });
         spinner.succeed('Liquidity pool audit complete.');
         emit(report, options, formatPoolAuditReport(report));
+      } catch (err: unknown) {
+        fail(err instanceof Error ? err.message : String(err), options, spinner);
+      }
+    });
+
+  program
+    .command('asset-flow <hash>')
+    .description('Read-only reconciliation of transfer operation amounts by account and asset')
+    .option('--max-pages <count>', 'Maximum operation/effect pages to retrieve', '10')
+    .option('--no-effects', 'Skip comparison against reported effects')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', DEFAULT_HORIZON)
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(async (hash: string, options: CommonOptions & { maxPages: string; effects: boolean }) => {
+      if (options.json) logger.setJsonMode(true);
+      const validation = validateLedgerInclusionHash(hash);
+      const maxPages = Number.parseInt(options.maxPages, 10);
+      if (!validation.valid) fail(validation.error as string, options);
+      if (!Number.isInteger(maxPages) || maxPages < 1) fail('--max-pages must be a positive integer', options);
+      const spinner = startSpinner('Reconciling asset flow...', !!options.json);
+      try {
+        const report = await reconcileAssetFlow(options.horizon, hash, {
+          maxPages,
+          compareEffects: options.effects,
+        });
+        spinner.succeed('Asset flow reconciliation complete.');
+        emit(report, options, formatAssetFlowReport(report));
       } catch (err: unknown) {
         fail(err instanceof Error ? err.message : String(err), options, spinner);
       }
