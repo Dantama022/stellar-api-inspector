@@ -73,6 +73,10 @@ import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
 import { verifyWasmIntegrity } from '../services/wasm-integrity';
+import { lookupFederationAddress } from '../inspectors/federation-lookup';
+import { validateSep10Challenge } from '../inspectors/sep10-challenge';
+import { inspectSep24Transaction } from '../inspectors/sep24-transaction';
+import { validateSep38Quote } from '../inspectors/sep38-quote';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -3345,6 +3349,338 @@ program
 
       writeResult(result, options, text);
       if (result.attentionRequired.length > 0) process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-064: Stellar Federation Server Lookup
+// ---------------------------------------------------------------------------
+program
+  .command('sep-federation <address>')
+  .description('Look up a Stellar federation address (e.g. alice*example.org) and audit the response')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .action(
+    async (address: string, options: { json?: boolean; output?: string; timeout?: string }) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const spinner = makeSpinner(`Looking up federation address: ${address}`, !!options.json).start();
+
+      let result;
+      try {
+        result = await lookupFederationAddress({
+          address,
+          timeoutMs: options.timeout ? parseInt(options.timeout, 10) : 10_000,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        process.exit(1);
+      }
+
+      if (result.status === 'resolved') {
+        spinner.succeed(`Federation address resolved: ${result.accountId}`);
+      } else {
+        spinner.fail(`Federation lookup status: ${result.status}`);
+      }
+
+      let text = `\n${chalk.bold.green('=== Stellar Federation Server Lookup ===')}\n\n`;
+      const rows: string[][] = [
+        ['Property', 'Value'],
+        ['Address', result.address],
+        ['Status', result.status === 'resolved' ? chalk.green(result.status.toUpperCase()) : chalk.red(result.status.toUpperCase())],
+        ['Domain', result.domain || 'N/A'],
+        ['TOML URL', result.toml.tomlUrl || 'N/A'],
+        ['Federation Server', result.federationServerUrl || 'N/A'],
+        ['Account ID', result.accountId || 'N/A'],
+        ['Account ID Valid', result.accountIdValid ? chalk.green('YES') : chalk.red('NO')],
+        ['Memo Type', result.memoType || 'None'],
+        ['Memo Value', result.memo || 'None'],
+        ['Memo Consistent', result.memoConsistent ? chalk.green('YES') : chalk.yellow('NO')],
+        ['Address Match', result.addressMatches ? chalk.green('YES') : chalk.yellow('NO')],
+        ['Latency', result.latencyMs > 0 ? `${result.latencyMs}ms` : 'N/A'],
+        ['Resolved At', result.resolvedAt],
+      ];
+      text += formatTable(rows);
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'error' ? chalk.red('✗') : f.severity === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
+          text += `${icon} [${f.code}] ${f.message}\n`;
+        }
+      }
+
+      writeResult(result, options, text);
+      if (result.status !== 'resolved') process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-065: SEP-10 Web Authentication Challenge Validation
+// ---------------------------------------------------------------------------
+program
+  .command('sep-auth <envelopeXdr>')
+  .description('Validate a SEP-10 Web Authentication challenge transaction envelope')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('--server-account <key>', 'Expected server signing account (G...)')
+  .option('--client-account <key>', 'Expected client account (G...)')
+  .option('--network <passphrase>', 'Network passphrase or name (mainnet/testnet/futurenet)', 'testnet')
+  .action(
+    async (
+      envelopeXdr: string,
+      options: {
+        json?: boolean;
+        output?: string;
+        serverAccount?: string;
+        clientAccount?: string;
+        network?: string;
+      },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const spinner = makeSpinner('Validating SEP-10 challenge...', !!options.json).start();
+
+      let result;
+      try {
+        result = validateSep10Challenge({
+          envelopeXdr,
+          serverAccount: options.serverAccount,
+          clientAccount: options.clientAccount,
+          networkPassphrase: options.network,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        process.exit(1);
+      }
+
+      if (result.structurallyValid) {
+        spinner.succeed('SEP-10 challenge is structurally valid.');
+      } else {
+        spinner.fail(`SEP-10 challenge validation failed: ${result.status}`);
+      }
+
+      let text = `\n${chalk.bold.green('=== SEP-10 Web Authentication Challenge Validation ===')}\n\n`;
+      const rows: string[][] = [
+        ['Property', 'Value'],
+        ['Status', result.structurallyValid ? chalk.green(result.status.toUpperCase()) : chalk.red(result.status.toUpperCase())],
+        ['Expected Server', result.expectedServerAccount || 'Not provided'],
+        ['Expected Client', result.expectedClientAccount || 'Not provided'],
+      ];
+
+      if (result.details) {
+        const d = result.details;
+        rows.push(
+          ['Source Account', d.sourceAccount || 'Unknown'],
+          ['Sequence Number', d.sequenceNumber || 'Unknown'],
+          ['Network', d.networkPassphrase],
+          ['Has Time Bounds', d.hasTimeBounds ? chalk.green('YES') : chalk.red('NO')],
+          ['Within Time Bounds', d.withinTimeBounds ? chalk.green('YES') : chalk.yellow('NO')],
+          ['Min Time', d.minTimeBound !== undefined ? new Date(d.minTimeBound * 1000).toISOString() : 'N/A'],
+          ['Max Time', d.maxTimeBound !== undefined ? new Date(d.maxTimeBound * 1000).toISOString() : 'N/A'],
+          ['Operation Count', String(d.operationCount)],
+          ['First Op manageData', d.firstOpIsManageData ? chalk.green('YES') : chalk.red('NO')],
+          ['First Op Key', d.firstOpKey || 'N/A'],
+          ['First Op Source = Client', d.firstOpSourceIsClient ? chalk.green('YES') : chalk.red('NO')],
+          ['Additional manage_data ops', String(d.additionalManageDataOps)],
+          ['Signature Count', String(d.signatureCount)],
+          ['Server Sig Present', d.serverSignaturePresent ? chalk.green('YES') : chalk.red('NO')],
+        );
+      }
+      text += formatTable(rows);
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'error' ? chalk.red('✗') : f.severity === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
+          text += `${icon} [${f.code}] ${f.message}\n`;
+        }
+      }
+
+      text += `\n${chalk.dim(`ℹ ${result.disclaimer}`)}\n`;
+
+      writeResult(result, options, text);
+      if (!result.structurallyValid) process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-066: SEP-24 Interactive Anchor Transaction Inspection
+// ---------------------------------------------------------------------------
+program
+  .command('sep-transaction <anchorUrl> <transactionId>')
+  .description('Inspect a SEP-24 interactive anchor transaction by ID')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('--auth-token <token>', 'JWT auth token for the anchor')
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .action(
+    async (
+      anchorUrl: string,
+      transactionId: string,
+      options: { json?: boolean; output?: string; authToken?: string; timeout?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const spinner = makeSpinner(`Fetching SEP-24 transaction ${transactionId}...`, !!options.json).start();
+
+      let result;
+      try {
+        result = await inspectSep24Transaction({
+          anchorUrl,
+          transactionId,
+          authToken: options.authToken,
+          timeoutMs: options.timeout ? parseInt(options.timeout, 10) : 10_000,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        process.exit(1);
+      }
+
+      if (result.found) {
+        spinner.succeed(`SEP-24 transaction found. Status: ${result.transaction?.status}`);
+      } else {
+        spinner.fail(`SEP-24 transaction not found or error (HTTP ${result.httpStatus})`);
+      }
+
+      let text = `\n${chalk.bold.green('=== SEP-24 Interactive Anchor Transaction Inspection ===')}\n\n`;
+      const rows: string[][] = [
+        ['Property', 'Value'],
+        ['Anchor URL', result.anchorUrl],
+        ['Transaction ID', result.transactionId],
+        ['HTTP Status', String(result.httpStatus)],
+        ['Found', result.found ? chalk.green('YES') : chalk.red('NO')],
+        ['Latency', `${result.latencyMs}ms`],
+        ['Inspected At', result.inspectedAt],
+      ];
+
+      if (result.transaction) {
+        const tx = result.transaction;
+        rows.push(
+          ['Kind', tx.kind || 'Unknown'],
+          ['Status', tx.status ? (result.isTerminalStatus ? chalk.yellow(tx.status) : chalk.cyan(tx.status)) : 'Unknown'],
+          ['Terminal Status', result.isTerminalStatus ? chalk.yellow('YES') : 'NO'],
+          ['Complete', result.isComplete ? chalk.green('YES') : 'NO'],
+          ['Status Explanation', result.statusExplanation || 'N/A'],
+          ['Amount In', tx.amountIn ? `${tx.amountIn} ${tx.amountInAsset || ''}`.trim() : 'N/A'],
+          ['Amount Out', tx.amountOut ? `${tx.amountOut} ${tx.amountOutAsset || ''}`.trim() : 'N/A'],
+          ['Fee', tx.amountFee ? `${tx.amountFee} ${tx.amountFeeAsset || ''}`.trim() : 'N/A'],
+          ['From', tx.from || 'N/A'],
+          ['To', tx.to || 'N/A'],
+          ['Started At', tx.startedAt || 'N/A'],
+          ['Completed At', tx.completedAt || 'N/A'],
+          ['Stellar TX ID', tx.stellarTransactionId || 'N/A'],
+          ['External TX ID', tx.externalTransactionId || 'N/A'],
+          ['Message', tx.message || 'N/A'],
+        );
+      }
+      text += formatTable(rows);
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'error' ? chalk.red('✗') : f.severity === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
+          text += `${icon} [${f.code}] ${f.message}\n`;
+        }
+      }
+
+      text += `\n${chalk.dim(`ℹ ${result.disclaimer}`)}\n`;
+
+      writeResult(result, options, text);
+      if (!result.found) process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-067: SEP-38 Anchor Quote Validation
+// ---------------------------------------------------------------------------
+program
+  .command('sep-quote <quoteJson>')
+  .description('Validate and audit a SEP-38 anchor quote response for price consistency and expiration')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('--firm', 'Treat the quote as a firm quote (overrides auto-detection)')
+  .action(
+    async (quoteJson: string, options: { json?: boolean; output?: string; firm?: boolean }) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const spinner = makeSpinner('Validating SEP-38 quote...', !!options.json).start();
+
+      let result;
+      try {
+        result = validateSep38Quote({ quote: quoteJson, firm: options.firm });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        process.exit(1);
+      }
+
+      if (result.valid && !result.isExpired) {
+        spinner.succeed('SEP-38 quote is valid and consistent.');
+      } else if (result.isExpired) {
+        spinner.fail('SEP-38 quote has expired.');
+      } else {
+        spinner.fail('SEP-38 quote validation found issues.');
+      }
+
+      const d = result.details;
+      let text = `\n${chalk.bold.green('=== SEP-38 Anchor Quote Validation ===')}\n\n`;
+      const rows: string[][] = [
+        ['Property', 'Value'],
+        ['Quote Type', result.isFirm ? chalk.cyan('FIRM') : chalk.blue('INDICATIVE')],
+        ['Valid', result.valid ? chalk.green('YES') : chalk.red('NO')],
+        ['Expired', result.isExpired ? chalk.red('YES') : chalk.green('NO')],
+        ['Quote ID', d.id || 'N/A'],
+        ['Expires At', d.expiresAt || 'N/A'],
+        ['Expires In', d.expiresInSeconds !== undefined ? `${d.expiresInSeconds}s` : 'N/A'],
+        ['Sell Asset', d.sellAsset || 'N/A'],
+        ['Buy Asset', d.buyAsset || 'N/A'],
+        ['Sell Amount', d.sellAmount || 'N/A'],
+        ['Buy Amount', d.buyAmount || 'N/A'],
+        ['Price', d.price || 'N/A'],
+        ['Total Price (incl. fees)', d.totalPrice || 'N/A'],
+        ['Fee Total', d.fee?.total || 'N/A'],
+        ['Fee Asset', d.fee?.asset || 'N/A'],
+      ];
+      text += formatTable(rows);
+
+      text += `\n${chalk.bold.cyan('--- Price Consistency Audit ---')}\n`;
+      const pc = result.priceConsistency;
+      const pcRows: string[][] = [
+        ['Check', 'Result'],
+        ['Sell Amount Consistent', pc.sellAmountConsistent ? chalk.green('PASS') : chalk.red('FAIL')],
+        ['Buy Amount Consistent', pc.buyAmountConsistent ? chalk.green('PASS') : chalk.red('FAIL')],
+        ['Fees Within Bounds', pc.feesWithinBounds ? chalk.green('PASS') : chalk.red('FAIL')],
+        ['Tolerance Used', `${pc.tolerancePercent}%`],
+        ['Calculated Sell Amount', pc.calculatedSellAmount || 'N/A'],
+        ['Calculated Buy Amount', pc.calculatedBuyAmount || 'N/A'],
+      ];
+      text += formatTable(pcRows);
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'error' ? chalk.red('✗') : f.severity === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
+          text += `${icon} [${f.code}] ${f.message}\n`;
+        }
+      }
+
+      text += `\n${chalk.dim(`ℹ ${result.disclaimer}`)}\n`;
+
+      writeResult(result, options, text);
+      if (!result.valid || result.isExpired) process.exit(1);
     },
   );
 

@@ -1,6 +1,3 @@
-I'll create the trustline exposure service. Since I don't have the exact contents of the existing files, I'll implement it in a way that reuses the existing clients with reasonable interfaces, keeping the code self-contained and robust.
-
-```typescript
 /**
  * Trustline Exposure and Issuer Concentration Audit (ISSUE-093)
  *
@@ -917,11 +914,3 @@ export class TrustlineExposureService {
 }
 
 export default TrustlineExposureService;
-```
-
-Note: This implementation assumes the following interfaces from the existing project files (adjust imports/field names if they differ):
-
-- `src/services/horizon-client.ts` exports `HorizonClient`, `HorizonTrustlineRecord` (with fields `asset_type`, `asset_code`, `asset_issuer`, `balance`, `limit`, `authorized`, `authorized_to_maintain_liabilities`, `is_authorized`, `is_clawback_enabled`, `buying_liabilities`, `selling_liabilities`, `liquidity_pool_id`), and `HorizonAccountResponse`.
-- `src/services/trustline-audit.ts` exports `TrustlineAuditService` with an `audit({ accountId, network })` method returning `{ trustlines, account }` as `TrustlineAuditResult`.
-
-If the actual field/method names differ, only the small adapter points (`identifyAsset`, `extractAuthorization`, `extractLiabilities`, and the `audit` call) need updating — the grouping, concentration, valuation, and finding logic is independent of those details.
