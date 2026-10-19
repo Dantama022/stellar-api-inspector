@@ -73,6 +73,10 @@ import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
 import { verifyWasmIntegrity } from '../services/wasm-integrity';
+import { inspectSep30Recovery } from '../inspectors/sep30-recovery-inspection';
+import { auditContractSpec } from '../inspectors/contract-spec-audit';
+import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
+import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -3347,6 +3351,547 @@ program
       if (result.attentionRequired.length > 0) process.exit(1);
     },
   );
+
+// ---------------------------------------------------------------------------
+// ISSUE-070: SEP-30 Account Recovery Server Inspection
+// ---------------------------------------------------------------------------
+program
+  .command('sep30-recovery <accountId>')
+  .description(
+    'Inspect a SEP-30 account recovery server response and audit signer/threshold alignment',
+  )
+  .option('--response <path>', 'Path to a saved SEP-30 JSON response file')
+  .option('--response-json <json>', 'Inline SEP-30 recovery account response JSON string')
+  .option(
+    '-H, --horizon <url>',
+    'Horizon server URL for on-chain account lookup',
+    'https://horizon-testnet.stellar.org',
+  )
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      accountId: string,
+      options: {
+        response?: string;
+        responseJson?: string;
+        horizon: string;
+        json?: boolean;
+        output?: string;
+      },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (!accountId.startsWith('G') || accountId.length !== 56) {
+        const msg = 'Invalid account ID. Must be a 56-character string starting with G.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      let recoveryResponse: unknown;
+
+      if (options.responseJson) {
+        recoveryResponse = options.responseJson;
+      } else if (options.response) {
+        try {
+          recoveryResponse = fs.readFileSync(options.response, 'utf8');
+        } catch (err: unknown) {
+          const msg = `Could not read response file: ${err instanceof Error ? err.message : String(err)}`;
+          if (options.json) outputJsonError(msg);
+          logger.error(msg);
+          process.exit(1);
+        }
+      } else {
+        const msg = 'No SEP-30 response provided. Use --response <path> or --response-json <json>.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Auditing SEP-30 recovery for ${accountId.slice(0, 8)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await inspectSep30Recovery({
+        accountId,
+        recoveryResponse,
+        horizonUrl: options.horizon,
+      });
+
+      if (result.status === 'error') {
+        spinner.fail('SEP-30 audit completed with errors.');
+      } else if (result.status === 'insufficient-quorum') {
+        spinner.fail('SEP-30 audit: insufficient signer quorum.');
+      } else if (result.status === 'warning' || result.status === 'inconclusive') {
+        spinner.succeed('SEP-30 audit completed with warnings.');
+      } else {
+        spinner.succeed('SEP-30 audit passed.');
+      }
+
+      const statusColor =
+        result.status === 'pass'
+          ? chalk.green(result.status.toUpperCase())
+          : result.status === 'warning' || result.status === 'inconclusive'
+          ? chalk.yellow(result.status.toUpperCase())
+          : chalk.red(result.status.toUpperCase());
+
+      let text = `\n${chalk.bold.green('=== SEP-30 Account Recovery Server Inspection ===')}\n\n`;
+      text += formatTable([
+        ['Property', 'Value'],
+        ['Account ID', result.accountId],
+        ['Status', statusColor],
+        ['Recovery Signers', String(result.recoverySignerCount)],
+        ['On-chain Signers', String(result.onChainSignerCount)],
+        ['Matching Signers', String(result.matchingSignerCount)],
+        ['Audited At', result.auditedAt],
+      ]);
+
+      if (result.signerComparison.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Signer Comparison ---')}\n`;
+        const signerRows: string[][] = [['Key (first 20 chars)', 'Status', 'Rec. Weight', 'On-chain Weight', 'Note']];
+        for (const s of result.signerComparison) {
+          const sc =
+            s.status === 'matching'
+              ? chalk.green(s.status)
+              : s.status === 'missing-on-chain'
+              ? chalk.yellow(s.status)
+              : s.status === 'extra-on-chain'
+              ? chalk.blue(s.status)
+              : chalk.red(s.status);
+          signerRows.push([
+            s.key.slice(0, 20) + '...',
+            sc,
+            s.recoveryWeight !== undefined ? String(s.recoveryWeight) : 'N/A',
+            s.onChainWeight !== undefined ? String(s.onChainWeight) : 'N/A',
+            s.note ?? '',
+          ]);
+        }
+        text += formatTable(signerRows);
+      }
+
+      if (result.thresholdAnalysis.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Threshold Analysis ---')}\n`;
+        const thrRows: string[][] = [['Threshold', 'Value', 'Available Weight', 'Satisfied']];
+        for (const t of result.thresholdAnalysis) {
+          thrRows.push([
+            t.thresholdName,
+            String(t.value),
+            String(t.availableWeight),
+            t.satisfied ? chalk.green('YES') : chalk.red('NO'),
+          ]);
+        }
+        text += formatTable(thrRows);
+      }
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'critical' || f.severity === 'error'
+              ? chalk.red('✗')
+              : f.severity === 'warning'
+              ? chalk.yellow('⚠')
+              : chalk.blue('ℹ');
+          text += `${icon} [${f.severity.toUpperCase()}] ${f.code}: ${f.message}\n`;
+        }
+      }
+
+      text += `\n${chalk.gray(result.disclaimer)}\n`;
+
+      writeResult(result, options, text);
+      if (result.status === 'error' || result.status === 'insufficient-quorum') process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-069: Soroban Contract Interface and Specification Audit
+// ---------------------------------------------------------------------------
+program
+  .command('contract-spec')
+  .description('Audit a Soroban contract WASM interface specification (contractspecv0 / SEP-48)')
+  .option('--wasm <path>', 'Path to a local WASM file')
+  .option('--contract-id <id>', 'Deployed contract ID (C...)')
+  .option('-r, --rpc <url>', 'Soroban RPC URL', 'https://soroban-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (options: {
+      wasm?: string;
+      contractId?: string;
+      rpc: string;
+      json?: boolean;
+      output?: string;
+    }) => {
+      if (options.json) logger.setJsonMode(true);
+
+      if (!options.wasm && !options.contractId) {
+        const msg = 'Provide either --wasm <path> or --contract-id <id>.';
+        if (options.json) outputJsonError(msg);
+        logger.error(msg);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        options.wasm
+          ? `Auditing contract spec from ${options.wasm}...`
+          : `Fetching and auditing contract spec for ${options.contractId?.slice(0, 10)}...`,
+        !!options.json,
+      ).start();
+
+      const result = await auditContractSpec({
+        wasm: options.wasm,
+        contractId: options.contractId,
+        rpcUrl: options.rpc,
+      });
+
+      if (result.status === 'unavailable' || result.status === 'malformed') {
+        spinner.fail(`Contract spec audit: ${result.status}.`);
+      } else if (result.status === 'absent') {
+        spinner.succeed('Contract spec audit complete — no spec section found.');
+      } else {
+        spinner.succeed(
+          `Contract spec audit complete — ${result.functionCount} function(s), ${result.udtCount} type(s).`,
+        );
+      }
+
+      const statusColor =
+        result.status === 'decoded'
+          ? chalk.green(result.status.toUpperCase())
+          : result.status === 'partially-decoded'
+          ? chalk.yellow(result.status.toUpperCase())
+          : result.status === 'absent'
+          ? chalk.gray(result.status.toUpperCase())
+          : chalk.red(result.status.toUpperCase());
+
+      let text = `\n${chalk.bold.green('=== Soroban Contract Specification Audit ===')}\n\n`;
+      text += formatTable([
+        ['Property', 'Value'],
+        ['Source', result.source],
+        ['Status', statusColor],
+        ['Has Spec', result.hasSpec ? chalk.green('YES') : chalk.red('NO')],
+        ['Function Count', String(result.functionCount)],
+        ['UDT Count', String(result.udtCount)],
+        [
+          'Spec Section Size',
+          result.specSectionSizeBytes !== undefined ? `${result.specSectionSizeBytes} bytes` : 'N/A',
+        ],
+        ['Audited At', result.auditedAt],
+      ]);
+
+      if (result.functions.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Functions (${result.functions.length}) ---`)}\n`;
+        const fnRows: string[][] = [['Name', 'Inputs', 'Outputs', 'Has Docs']];
+        for (const fn of result.functions) {
+          const inputStr =
+            fn.inputs.length === 0
+              ? '(none)'
+              : fn.inputs.map((i) => `${i.name}: ${i.type}`).join(', ');
+          const outputStr = fn.outputs.length === 0 ? '(none)' : fn.outputs.join(', ');
+          fnRows.push([
+            fn.name,
+            inputStr.length > 40 ? inputStr.slice(0, 37) + '...' : inputStr,
+            outputStr.length > 30 ? outputStr.slice(0, 27) + '...' : outputStr,
+            fn.doc ? chalk.green('YES') : chalk.gray('NO'),
+          ]);
+        }
+        text += formatTable(fnRows);
+      }
+
+      if (result.udts.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- User-Defined Types (${result.udts.length}) ---`)}\n`;
+        const udtRows: string[][] = [['Name', 'Kind', 'Fields/Variants', 'Has Docs']];
+        for (const u of result.udts) {
+          const members = u.fields
+            ? u.fields.map((f) => f.name).join(', ')
+            : u.variants
+            ? u.variants.join(', ')
+            : '';
+          udtRows.push([
+            u.name,
+            u.kind,
+            members.length > 40 ? members.slice(0, 37) + '...' : members,
+            u.doc ? chalk.green('YES') : chalk.gray('NO'),
+          ]);
+        }
+        text += formatTable(udtRows);
+      }
+
+      if (result.warnings.length > 0) {
+        text += '\n';
+        for (const w of result.warnings) {
+          text += `${chalk.yellow('⚠')} ${w}\n`;
+        }
+      }
+
+      text += `\n${chalk.gray('Note: A present specification does not guarantee that a contract behaves as documented.')}\n`;
+
+      writeResult(result, options, text);
+      if (result.status === 'unavailable' || result.status === 'malformed') process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-068 (SEP-12): Customer KYC Status and Required-Field Audit
+// ---------------------------------------------------------------------------
+program
+  .command('sep12-kyc')
+  .description(
+    'Audit a SEP-12 KYC customer response — field names, statuses, and counts only (no personal data)',
+  )
+  .option('--response <path>', 'Path to a saved SEP-12 JSON response file')
+  .option('--response-json <json>', 'Inline SEP-12 response JSON string')
+  .option('--kyc-server <url>', 'KYC server base URL for a live GET /customer request')
+  .option('--customer-id <id>', 'Customer ID for live fetch')
+  .option('--auth-token <token>', 'Auth token for live fetch (never included in output)')
+  .option('--customer-type <type>', 'Customer type filter')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (options: {
+      response?: string;
+      responseJson?: string;
+      kycServer?: string;
+      customerId?: string;
+      authToken?: string;
+      customerType?: string;
+      json?: boolean;
+      output?: string;
+    }) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const spinner = makeSpinner('Auditing SEP-12 KYC response...', !!options.json).start();
+
+      const result = await auditSep12Kyc({
+        response: options.responseJson,
+        responsePath: options.response,
+        kycServerUrl: options.kycServer,
+        customerId: options.customerId,
+        authToken: options.authToken,
+        customerType: options.customerType,
+      });
+
+      const hasError = result.findings.some((f) => f.severity === 'error');
+      if (hasError) {
+        spinner.fail('SEP-12 KYC audit completed with errors.');
+      } else {
+        spinner.succeed(`SEP-12 KYC audit complete. Status: ${result.status}`);
+      }
+
+      const statusColor =
+        result.status === 'ACCEPTED'
+          ? chalk.green(result.status)
+          : result.status === 'NEEDS_INFO'
+          ? chalk.yellow(result.status)
+          : result.status === 'PROCESSING'
+          ? chalk.blue(result.status)
+          : result.status === 'REJECTED'
+          ? chalk.red(result.status)
+          : chalk.gray(result.status);
+
+      let text = `\n${chalk.bold.green('=== SEP-12 Customer KYC Status Audit ===')}\n\n`;
+      text += formatTable([
+        ['Property', 'Value'],
+        ['Customer ID', result.customerId ?? 'N/A'],
+        ['Status', statusColor],
+        ['Customer Type', result.customerType ?? 'N/A'],
+        ['Message', result.message ?? 'N/A'],
+        ['Total Fields', String(result.counts.totalFields)],
+        ['Required Outstanding', String(result.counts.requiredOutstanding)],
+        ['Provided (Accepted)', String(result.counts.providedAccepted)],
+        ['Provided (Processing)', String(result.counts.providedProcessing)],
+        ['Provided (Rejected)', String(result.counts.providedRejected)],
+        ['Audited At', result.auditedAt],
+      ]);
+
+      if (result.outstandingRequiredFields.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Outstanding Required Fields (${result.outstandingRequiredFields.length}) ---`)}\n`;
+        const fieldRows: string[][] = [['Field Name', 'Type', 'Description']];
+        for (const f of result.outstandingRequiredFields) {
+          const desc = f.description ?? '';
+          fieldRows.push([
+            f.name,
+            f.type ?? 'N/A',
+            desc.length > 50 ? desc.slice(0, 47) + '...' : desc,
+          ]);
+        }
+        text += formatTable(fieldRows);
+      }
+
+      if (result.providedFields.length > 0) {
+        text += `\n${chalk.bold.cyan(`--- Provided Fields (${result.providedFields.length}) ---`)}\n`;
+        const provRows: string[][] = [['Field Name', 'Type', 'Verification Status']];
+        for (const f of result.providedFields) {
+          const vs = f.verificationStatus ?? 'N/A';
+          const vsColor =
+            vs === 'ACCEPTED'
+              ? chalk.green(vs)
+              : vs === 'REJECTED'
+              ? chalk.red(vs)
+              : vs === 'PROCESSING'
+              ? chalk.blue(vs)
+              : vs === 'VERIFICATION_REQUIRED'
+              ? chalk.yellow(vs)
+              : chalk.gray(vs);
+          provRows.push([f.name, f.type ?? 'N/A', vsColor]);
+        }
+        text += formatTable(provRows);
+      }
+
+      if (result.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const f of result.findings) {
+          const icon =
+            f.severity === 'error'
+              ? chalk.red('✗')
+              : f.severity === 'warning'
+              ? chalk.yellow('⚠')
+              : chalk.blue('ℹ');
+          text += `${icon} [${f.severity.toUpperCase()}] ${f.code}: ${f.message}\n`;
+        }
+      }
+
+      text += `\n${chalk.gray(result.privacyNote)}\n`;
+
+      writeResult(result, options, text);
+      if (hasError) process.exit(1);
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-098 (SEP-7): Stellar URI Request Inspection and Validation
+// ---------------------------------------------------------------------------
+program
+  .command('sep7 <uri>')
+  .description('Inspect and validate a SEP-7 web+stellar: URI (pay or tx request)')
+  .option('-j, --json', 'Output raw JSON')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(async (uri: string, options: { json?: boolean; output?: string }) => {
+    if (options.json) logger.setJsonMode(true);
+
+    const result = inspectSep7Uri(uri);
+
+    const hasErrors = result.findings.some((f) => f.severity === 'error');
+    const validColor = result.valid ? chalk.green('VALID') : chalk.red('INVALID');
+
+    let text = `\n${chalk.bold.green('=== SEP-7 Stellar URI Inspection ===')}\n\n`;
+    text += formatTable([
+      ['Property', 'Value'],
+      ['URI Type', result.uriType],
+      ['Valid', validColor],
+      ['Origin Domain', result.requestSigning.hasOriginDomain ? chalk.green('Present') : chalk.gray('Absent')],
+      ['Has Signature', result.requestSigning.hasSignature ? chalk.yellow('Present') : chalk.gray('Absent')],
+      ['Signature Status', result.requestSigning.signatureStatus],
+      ['Inspected At', result.inspectedAt],
+    ]);
+
+    if (result.uriType === 'pay' && result.payParams) {
+      text += `\n${chalk.bold.cyan('--- Payment Request Details ---')}\n`;
+      const p = result.payParams;
+      text += formatTable([
+        ['Field', 'Value'],
+        ['Destination', p.destination ?? 'N/A'],
+        ['Amount', p.amount ?? 'N/A'],
+        ['Asset Code', p.assetCode ?? 'XLM (native)'],
+        ['Asset Issuer', p.assetIssuer ?? 'N/A'],
+        ['Memo', p.memo ?? 'N/A'],
+        ['Memo Type', p.memoType ?? 'N/A'],
+        ['Message (msg)', p.msg ?? 'N/A'],
+        ['Network Passphrase', p.networkPassphrase ?? 'N/A'],
+        ['Callback', p.callback ? chalk.yellow(p.callback) : 'N/A'],
+      ]);
+    }
+
+    if (result.uriType === 'tx' && result.txParams) {
+      text += `\n${chalk.bold.cyan('--- Transaction Request Details ---')}\n`;
+      const p = result.txParams;
+      text += formatTable([
+        ['Field', 'Value'],
+        ['Pubkey', p.pubkey ?? 'N/A'],
+        ['Message (msg)', p.msg ?? 'N/A'],
+        ['Network Passphrase', p.networkPassphrase ?? 'N/A'],
+        ['Callback', p.callback ? chalk.yellow(p.callback) : 'N/A'],
+        ['XDR (truncated)', p.xdr ? p.xdr.slice(0, 60) + '...' : 'N/A'],
+      ]);
+
+      if (result.decodedTransaction) {
+        text += `\n${chalk.bold.cyan('--- Decoded Transaction ---')}\n`;
+        const dt = result.decodedTransaction;
+        const dtRows: string[][] = [
+          ['Field', 'Value'],
+          ['Source Account', dt.sourceAccount ?? 'N/A'],
+          ['Fee (stroops)', dt.fee !== undefined ? String(dt.fee) : 'N/A'],
+          ['Operation Count', dt.operationCount !== undefined ? String(dt.operationCount) : 'N/A'],
+          ['Memo Type', dt.memoType ?? 'N/A'],
+          ['Memo', dt.memo ?? 'N/A'],
+          [
+            'Time Bounds (min)',
+            dt.timeBoundsMinTime
+              ? new Date(dt.timeBoundsMinTime * 1000).toISOString()
+              : 'N/A',
+          ],
+          [
+            'Time Bounds (max)',
+            dt.timeBoundsMaxTime
+              ? new Date(dt.timeBoundsMaxTime * 1000).toISOString()
+              : 'N/A',
+          ],
+          ['Network', dt.networkPassphrase ?? (dt.decodeError ? 'Unknown' : 'N/A')],
+        ];
+        if (dt.decodeError) dtRows.push(['Decode Note', chalk.yellow(dt.decodeError)]);
+        text += formatTable(dtRows);
+      }
+    }
+
+    text += `\n${chalk.bold.cyan('--- Request Signing ---')}\n`;
+    const originDomainValue =
+      result.payParams?.originDomain ?? result.txParams?.originDomain ?? '';
+    text += formatTable([
+      ['Property', 'Value'],
+      [
+        'Origin Domain',
+        result.requestSigning.hasOriginDomain
+          ? result.requestSigning.originDomainValid
+            ? chalk.green(originDomainValue)
+            : chalk.yellow(originDomainValue + ' (invalid format)')
+          : chalk.gray('Not present'),
+      ],
+      [
+        'Signature',
+        result.requestSigning.hasSignature
+          ? chalk.yellow('Present (unverified)')
+          : chalk.gray('Absent'),
+      ],
+    ]);
+    text += `${chalk.gray(result.requestSigning.note)}\n`;
+
+    if (result.findings.length > 0) {
+      text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+      for (const f of result.findings) {
+        const icon =
+          f.severity === 'error'
+            ? chalk.red('✗')
+            : f.severity === 'warning'
+            ? chalk.yellow('⚠')
+            : chalk.blue('ℹ');
+        const fieldStr = f.field ? ` [${f.field}]` : '';
+        text += `${icon} [${f.severity.toUpperCase()}]${fieldStr} ${f.code}: ${f.message}\n`;
+      }
+    }
+
+    if (result.warnings.length > 0) {
+      text += '\n';
+      for (const w of result.warnings) {
+        text += `${chalk.yellow('⚠')} ${w}\n`;
+      }
+    }
+
+    text += `\n${chalk.gray('Disclaimer: This inspector never signs transactions, submits payments, or follows callback URLs.')}\n`;
+
+    writeResult(result, options, text);
+    if (hasErrors) process.exit(1);
+  });
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {
