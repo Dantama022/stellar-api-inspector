@@ -25,6 +25,7 @@ import { auditAccountMerge, validateMergeAccountIds } from '../inspectors/accoun
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
+import { registerValreb001Commands } from './commands/valreb001';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { analyzeFeeBumpTransaction } from '../inspectors/fee-bump';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
@@ -39,7 +40,9 @@ import {
 import { analyzeLedgerRange } from '../services/ledger-analyzer';
 import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
+import { registerRdjSavyyCommands } from './commands/rdj-savyy';
 import { validateHorizonUrl } from '../utils/urls';
+import { registerFreezyyyArchCommands } from './commands/freezyyy-arch';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
@@ -77,10 +80,15 @@ import { formatLedgerGapReport } from '../output/ledger-gap-report';
 import { auditAssetMetadata, AssetMetadataInput } from '../inspectors/asset-metadata-audit';
 import { formatAssetMetadataAuditReport } from '../output/asset-metadata-audit-report';
 import { inspectTls } from '../services/tls-inspector';
+import { registerDevMakeemCommands } from './commands/dev-makeem';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
 import { verifyWasmIntegrity } from '../services/wasm-integrity';
+import { inspectSep30Recovery } from '../inspectors/sep30-recovery-inspection';
+import { auditContractSpec } from '../inspectors/contract-spec-audit';
+import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
+import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -174,6 +182,8 @@ function writeResult(
 // ---------------------------------------------------------------------------
 // 1. Horizon Endpoint Checker
 // ---------------------------------------------------------------------------
+registerValreb001Commands(program);
+
 program
   .command('horizon <url>')
   .description('Inspect Stellar Horizon endpoint health, metadata, fee stats, and TLS security')
@@ -323,6 +333,8 @@ program
 // ---------------------------------------------------------------------------
 // 2. Soroban RPC Checker
 // ---------------------------------------------------------------------------
+registerRdjSavyyCommands(program);
+
 program
   .command('soroban <url>')
   .description('Inspect Soroban RPC health, network configuration, and ledger status')
@@ -790,6 +802,8 @@ program
       writeResult(report, options, formatAccountMergeAudit(report));
     },
   );
+
+registerFreezyyyArchCommands(program);
 
 program
   .command('account-offers <accountId>')
@@ -1695,6 +1709,8 @@ program
       writeResult(result, options, text);
     },
   );
+
+registerDevMakeemCommands(program);
 
 // ---------------------------------------------------------------------------
 // 8. Order Book Inspector
