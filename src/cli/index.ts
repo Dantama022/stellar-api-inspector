@@ -89,6 +89,7 @@ import { inspectSep30Recovery } from '../inspectors/sep30-recovery-inspection';
 import { auditContractSpec } from '../inspectors/contract-spec-audit';
 import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
 import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
+import { registerSepComplianceCommands } from './commands/sep-compliance';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -1711,6 +1712,7 @@ program
   );
 
 registerDevMakeemCommands(program);
+registerSepComplianceCommands(program);
 
 // ---------------------------------------------------------------------------
 // 8. Order Book Inspector
@@ -1953,7 +1955,6 @@ program
     writeResult(analysis, options, text);
   });
 
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // 9. Account Flags Inspector
 // ---------------------------------------------------------------------------
@@ -2401,6 +2402,8 @@ program
       }
     },
   );
+
+// ---------------------------------------------------------------------------
 // 12. Soroban Transaction Inspector
 // ---------------------------------------------------------------------------
 program
