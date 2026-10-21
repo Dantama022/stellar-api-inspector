@@ -494,6 +494,49 @@ export interface ReconcileOptions {
   activity?: ActivityRecord[];
 }
 
+export interface SnapshotCompatibilityIssue {
+  severity: "info" | "warning" | "error";
+  code: string;
+  message: string;
+}
+
+export type ReconciliationActivityRecord = ActivityRecord;
+
+export interface BalanceReconciliationOptions extends ReconcileOptions {
+  compatibilityIssues?: SnapshotCompatibilityIssue[];
+}
+
+export function validateSnapshotCompatibility(
+  before: AccountSnapshot,
+  after: AccountSnapshot,
+): SnapshotCompatibilityIssue[] {
+  const issues: SnapshotCompatibilityIssue[] = [];
+  if (before.accountId !== after.accountId) {
+    issues.push({
+      severity: "error",
+      code: "ACCOUNT_MISMATCH",
+      message: `Snapshots refer to different accounts: "${before.accountId}" vs "${after.accountId}".`,
+    });
+  }
+  const beforeNet = before.networkPassphrase ?? null;
+  const afterNet = after.networkPassphrase ?? null;
+  if (beforeNet && afterNet && beforeNet !== afterNet) {
+    issues.push({
+      severity: "error",
+      code: "NETWORK_MISMATCH",
+      message: `Snapshots refer to different networks: "${beforeNet}" vs "${afterNet}".`,
+    });
+  } else if (!beforeNet || !afterNet) {
+    issues.push({
+      severity: "warning",
+      code: "NETWORK_UNKNOWN",
+      message:
+        "Network passphrase missing from one or both snapshots; network compatibility could not be fully verified.",
+    });
+  }
+  return issues;
+}
+
 /**
  * Reconcile two account snapshots for the same account.
  *
@@ -502,7 +545,7 @@ export interface ReconcileOptions {
 export function reconcileAccountBalances(
   before: AccountSnapshot,
   after: AccountSnapshot,
-  options: ReconcileOptions = {},
+  options: BalanceReconciliationOptions = {},
 ): BalanceReconciliationResult {
   const findings: ReconciliationFinding[] = [];
   const limitations: string[] = [

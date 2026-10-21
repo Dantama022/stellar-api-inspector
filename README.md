@@ -485,6 +485,21 @@ The report retrieves both accounts and checks source XLM balance and liabilities
 
 This is a snapshot-based preflight, not a guarantee that a merge will execute: account state can change after inspection, Horizon history may be incomplete, and sponsorship counters do not enumerate every current ledger relationship. `--history-depth` optionally includes up to 200 recent source operations as supporting evidence, but historical operations do not establish current state. The command only performs GET requests; it never builds, signs, or submits a transaction.
 
+### Account Merge Impact Assessment
+
+Inspect the source account's potential transferable balances and the destination account's availability before preparing a merge:
+
+```bash
+npm run dev -- account-merge-impact G_SOURCE G_DESTINATION
+npm run dev -- account-merge-impact G_SOURCE G_DESTINATION --json
+```
+
+This read-only assessment retrieves both accounts and the latest ledger through Horizon. It reports source balances separately for each asset, selling and buying liabilities, source signer/trustline/offer/data-entry and sponsorship observations, and destination availability and account-level signer/sponsorship counters. JSON output includes both account IDs, an assessment (`clear`, `warning`, `blocked`, or `inconclusive`), findings, reserve details, and limitations.
+
+Per-asset available balance is balance minus selling liabilities; buying liabilities are displayed but do not reduce the owned balance. The estimated native merge amount subtracts native selling liabilities only and does not subtract the source reserve, because a successful merge removes the source account and releases its reserve. The separate minimum-balance estimate uses `(2 + subentry_count + num_sponsoring - num_sponsored) × base reserve` from the latest ledger and is reported as unknown when any required value is unavailable. These values are exact to Stellar's seven decimal places.
+
+The assessment identifies observed blockers but cannot simulate transaction execution, establish that liabilities or sponsorship can be resolved, or guarantee protocol success. Account balances and configuration are snapshots and may change before submission. It never constructs, signs, or submits a merge operation.
+
 ### Soroban Contract Inspection
 
 Inspect contract ledger entries exposed by Soroban RPC:

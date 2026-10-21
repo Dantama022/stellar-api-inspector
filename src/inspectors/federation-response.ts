@@ -175,12 +175,9 @@ export async function inspectFederationResponse(
   }
 
   const validationOptions: FederationResponseValidationOptions = {
-    response,
+    response: response as string | Record<string, unknown> | undefined,
     query,
-    federationEndpoint: endpoint,
-    performLookup,
-    timeoutMs,
-    redactSensitive,
+    endpoint,
   };
 
   return validateFederationResponse(validationOptions);

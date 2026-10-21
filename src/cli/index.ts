@@ -20,8 +20,13 @@ import {
 import { inspectRpcCapabilities, validateRpcUrl } from '../inspectors/rpc-capabilities';
 import { formatContractInspectionReport } from '../output/contract-report';
 import { formatAccountMergeAudit } from '../output/account-merge-audit';
+import { formatAccountMergeImpact } from '../output/account-merge-impact';
 import { auditAccount } from '../inspectors/account';
 import { auditAccountMerge, validateMergeAccountIds } from '../inspectors/account-merge-audit';
+import {
+  auditAccountMergeImpact,
+  validateMergeImpactAccountIds,
+} from '../inspectors/account-merge-impact';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
@@ -51,6 +56,13 @@ import { fetchOperations } from '../services/operations';
 import { inspectSorobanTransaction, validateTransactionHash } from '../inspectors/soroban-tx';
 import { fetchTrades } from '../services/trades';
 import { compareEndpoints } from '../services/endpoint-inspector';
+import {
+  formatClaimableBalanceReport,
+  formatOffersReport,
+  inspectAccountOffers,
+  inspectClaimableBalance,
+} from '../services/account-market';
+import { analyzeTransactionResult } from '../services/transaction-result-analyzer';
 import {
   analyzeTransaction,
   validateTransactionHash as validateTxHash,
@@ -86,12 +98,6 @@ import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
-import { verifyTransactionSignatures } from '../services/signature-verifier';
-import { verifyWasmIntegrity } from '../services/wasm-integrity';
-import { inspectSep30Recovery } from '../inspectors/sep30-recovery-inspection';
-import { auditContractSpec } from '../inspectors/contract-spec-audit';
-import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
-import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import { registerSepComplianceCommands } from './commands/sep-compliance';
 import dotenv from 'dotenv';
 
@@ -804,6 +810,43 @@ program
       spinner.succeed('Account merge audit complete.');
 
       writeResult(report, options, formatAccountMergeAudit(report));
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// Account Merge Impact Assessment
+// ---------------------------------------------------------------------------
+program
+  .command('account-merge-impact <sourceAccount> <destinationAccount>')
+  .description('Read-only assessment of balances and conditions for a proposed account merge')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      sourceAccount: string,
+      destinationAccount: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+      const validation = validateMergeImpactAccountIds(sourceAccount, destinationAccount);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        'Assessing source and destination accounts...',
+        !!options.json,
+      ).start();
+      const report = await auditAccountMergeImpact(
+        options.horizon,
+        sourceAccount,
+        destinationAccount,
+      );
+      spinner.succeed('Account merge impact assessment complete.');
+      writeResult(report, options, formatAccountMergeImpact(report));
     },
   );
 

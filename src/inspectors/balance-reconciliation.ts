@@ -1,5 +1,5 @@
 import { Horizon } from '@stellar/stellar-sdk';
-import { normalizeHorizonUrl } from '../utils/horizon-url';
+import { normalizeHorizonUrl } from '../utils/urls';
 import {
   reconcileAccountBalances,
   validateSnapshotCompatibility,
