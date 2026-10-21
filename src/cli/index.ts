@@ -81,6 +81,7 @@ import { auditAssetMetadata, AssetMetadataInput } from '../inspectors/asset-meta
 import { formatAssetMetadataAuditReport } from '../output/asset-metadata-audit-report';
 import { inspectTls } from '../services/tls-inspector';
 import { registerDevMakeemCommands } from './commands/dev-makeem';
+import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
@@ -1713,6 +1714,8 @@ program
 
 registerDevMakeemCommands(program);
 registerSepComplianceCommands(program);
+registerSepCompliance2Commands(program);
+
 
 // ---------------------------------------------------------------------------
 // 8. Order Book Inspector

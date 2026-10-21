@@ -1,5 +1,6 @@
 /**
  * SEP-30 Account Recovery Server Inspection (ISSUE-070)
+ * Extended by ISSUE-147: SEP-30 recovery response audit mode.
  *
  * Read-only diagnostic that inspects a SEP-30 account recovery server response
  * and audits the relationship between the Stellar account, recovery signer
@@ -12,6 +13,13 @@
  *  - Fetches the on-chain account via Horizon to obtain its signers and thresholds
  *  - Classifies each key as matching, missing-on-chain, or extra-on-chain
  *  - Evaluates whether matching signer weights satisfy each threshold
+ *
+ * EXTENSION (audit mode):
+ *  - Validates the recovery response against the SEP-30 response schema
+ *  - Enforces that signer key/weight entries are well-formed
+ *  - Emits explicit inconclusive findings for anything the offline response
+ *    cannot prove (account ownership, recovery outcome, authorization)
+ *  - Redacts fields that commonly contain secrets or recovery credentials
  *
  * IMPORTANT: This feature is read-only. It never registers accounts, updates
  * recovery identities, requests transaction signatures, or handles private keys
@@ -56,8 +64,33 @@ export interface Sep30RecoveryThresholdResult {
 
 export interface Sep30AuditFinding {
   code: string;
-  severity: 'info' | 'warning' | 'error' | 'critical';
+  severity: 'info' | 'warning' | 'error' | 'critical' | 'inconclusive';
   message: string;
+  field?: string;
+}
+
+/**
+ * Schema audit block added by ISSUE-147. Only present when `audit: true` was
+ * supplied. Its presence is what distinguishes an "audit" run from a normal
+ * inspection run.
+ */
+export interface Sep30SchemaAudit {
+  /** True when the top-level recovery response is a JSON object. */
+  responseIsObject: boolean;
+  /** True when the response contains a signers array with ≥1 entry. */
+  hasSignersArray: boolean;
+  /** Total entries in the signers array (0 if missing). */
+  signerCount: number;
+  /** Entries whose key is a valid Stellar Ed25519 public key. */
+  validSignerKeyCount: number;
+  /** Entries whose weight is a non-negative integer. */
+  validSignerWeightCount: number;
+  /** Top-level keys of the recovery response that we did not recognize. */
+  unknownTopLevelFields: string[];
+  /** Top-level keys that we redacted from the echo. */
+  redactedFields: string[];
+  /** Additional findings emitted by the schema audit. */
+  findings: Sep30AuditFinding[];
 }
 
 export interface Sep30RecoveryInspectionOptions {
@@ -67,6 +100,12 @@ export interface Sep30RecoveryInspectionOptions {
   recoveryResponse: unknown;
   /** Optional Horizon server URL. Defaults to testnet. */
   horizonUrl?: string;
+  /**
+   * EXTENSION (ISSUE-147): run the schema audit.
+   * When omitted/false, behavior is identical to the pre-extension inspector.
+   * When true, `schemaAudit` is populated and additional findings are appended.
+   */
+  audit?: boolean;
 }
 
 export interface Sep30RecoveryInspectionResult {
@@ -81,6 +120,12 @@ export interface Sep30RecoveryInspectionResult {
   warnings: string[];
   disclaimer: string;
   auditedAt: string;
+  /**
+   * EXTENSION (ISSUE-147): present only when `audit: true` was supplied.
+   * Backward compatible — existing consumers that destructure this result
+   * do not break because the field is optional.
+   */
+  schemaAudit?: Sep30SchemaAudit;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +138,46 @@ const DISCLAIMER =
   'guarantee successful SEP-30 recovery, nor does it verify that any particular ' +
   'recovery transaction will be authorized under the recovery service policy. ' +
   'Account state can change after inspection.';
+
+/**
+ * Field names we treat as potentially sensitive and redact from the audit
+ * summary. The values are NEVER echoed anyway, but we also suppress the field
+ * name from `unknownTopLevelFields` so reviewers cannot infer what was present.
+ */
+const SENSITIVE_FIELD_NAMES = new Set(
+  [
+    'token',
+    'secret',
+    'password',
+    'jwt',
+    'auth_token',
+    'auth',
+    'authorization',
+    'signature',
+    'private_key',
+    'mnemonic',
+    'seed',
+    'credential',
+    'credentials',
+    'session',
+    'api_key',
+    'apikey',
+  ].map((s) => s.toLowerCase()),
+);
+
+/**
+ * Top-level SEP-30 recovery response fields that the schema audit recognizes.
+ * Unknown top-level fields are reported as info findings (forward-compat).
+ */
+const KNOWN_TOP_LEVEL_FIELDS = new Set([
+  'account',
+  'address',
+  'signers',
+  'identities',
+  'status',
+  'error',
+  'message',
+]);
 
 function isValidStellarKey(key: unknown): key is string {
   if (typeof key !== 'string' || key.trim().length === 0) return false;
@@ -244,6 +329,172 @@ async function fetchOnChainAccount(
 }
 
 // ---------------------------------------------------------------------------
+// ISSUE-147: Schema audit
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the ISSUE-147 schema audit against the parsed recovery response.
+ * Pure function — no I/O. Called only when `audit: true`.
+ */
+function runSchemaAudit(
+  parsed: unknown,
+): Sep30SchemaAudit {
+  const findings: Sep30AuditFinding[] = [];
+
+  // 1. Top-level must be an object
+  const isObject =
+    !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  if (!isObject) {
+    findings.push({
+      code: 'SCHEMA_NOT_OBJECT',
+      severity: 'error',
+      message: 'SEP-30 recovery response must be a JSON object.',
+    });
+    return {
+      responseIsObject: false,
+      hasSignersArray: false,
+      signerCount: 0,
+      validSignerKeyCount: 0,
+      validSignerWeightCount: 0,
+      unknownTopLevelFields: [],
+      redactedFields: [],
+      findings,
+    };
+  }
+
+  const resp = parsed as Record<string, unknown>;
+
+  // 2. Signers array presence
+  const rawSigners = resp['signers'];
+  const signersIsArray = Array.isArray(rawSigners);
+  if (signersIsArray) {
+    if ((rawSigners as unknown[]).length === 0) {
+      findings.push({
+        code: 'SCHEMA_EMPTY_SIGNERS',
+        severity: 'warning',
+        field: 'signers',
+        message:
+          'SEP-30 response contains an empty "signers" array. A recovery account must expose at least one recovery signer.',
+      });
+    }
+  } else if (rawSigners !== undefined) {
+    findings.push({
+      code: 'SCHEMA_SIGNERS_NOT_ARRAY',
+      severity: 'error',
+      field: 'signers',
+      message: 'SEP-30 "signers" field must be an array if present.',
+    });
+  }
+
+  // 3. Validate each signer entry
+  let validKeyCount = 0;
+  let validWeightCount = 0;
+  if (signersIsArray) {
+    (rawSigners as unknown[]).forEach((entry, idx) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        findings.push({
+          code: 'SCHEMA_SIGNER_NOT_OBJECT',
+          severity: 'error',
+          field: `signers[${idx}]`,
+          message: `Signers[${idx}] must be an object with a "key" field.`,
+        });
+        return;
+      }
+      const e = entry as Record<string, unknown>;
+      if (!isValidStellarKey(e['key'])) {
+        findings.push({
+          code: 'SCHEMA_SIGNER_INVALID_KEY',
+          severity: 'error',
+          field: `signers[${idx}].key`,
+          message: `Signers[${idx}].key must be a valid Stellar Ed25519 public key.`,
+        });
+      } else {
+        validKeyCount += 1;
+      }
+      if (e['weight'] !== undefined) {
+        const w = parseWeight(e['weight']);
+        if (w === undefined) {
+          findings.push({
+            code: 'SCHEMA_SIGNER_INVALID_WEIGHT',
+            severity: 'error',
+            field: `signers[${idx}].weight`,
+            message: `Signers[${idx}].weight must be a non-negative integer.`,
+          });
+        } else {
+          validWeightCount += 1;
+        }
+      }
+    });
+  }
+
+  // 4. Unknown top-level fields (forward-compatible info findings)
+  const knownKeys = Object.keys(resp).filter((k) => KNOWN_TOP_LEVEL_FIELDS.has(k));
+  const rawUnknownKeys = Object.keys(resp).filter((k) => !KNOWN_TOP_LEVEL_FIELDS.has(k));
+
+  const unknownTopLevelFields: string[] = [];
+  const redactedFields: string[] = [];
+  for (const key of rawUnknownKeys) {
+    if (SENSITIVE_FIELD_NAMES.has(key.toLowerCase())) {
+      redactedFields.push(key);
+    } else {
+      unknownTopLevelFields.push(key);
+      findings.push({
+        code: 'SCHEMA_UNKNOWN_FIELD',
+        severity: 'info',
+        field: key,
+        message: `Top-level field "${key}" is not recognized by SEP-30. It is reported as informational.`,
+      });
+    }
+  }
+
+  // 5. Redacted fields (info finding, name only — values are never present)
+  for (const key of redactedFields) {
+    findings.push({
+      code: 'SCHEMA_REDACTED_FIELD',
+      severity: 'info',
+      field: key,
+      message: `Top-level field "${key}" matches a known-sensitive pattern and its value was redacted.`,
+    });
+  }
+
+  // 6. Structural inconclusive findings — always emitted in audit mode
+  findings.push({
+    code: 'ACCOUNT_OWNERSHIP_NOT_VERIFIED',
+    severity: 'inconclusive',
+    message:
+      'A structurally valid SEP-30 response does not prove that the caller owns or controls the account. ' +
+      'Ownership proof requires authentication evidence that this inspector cannot obtain offline.',
+  });
+  findings.push({
+    code: 'RECOVERY_OUTCOME_NOT_VERIFIED',
+    severity: 'inconclusive',
+    message:
+      'This inspector cannot determine whether a recovery request has succeeded or will succeed. ' +
+      'SEP-30 recovery success requires anchor-side state that is not visible from a static response.',
+  });
+  findings.push({
+    code: 'RECOVERY_AUTHORIZATION_NOT_VERIFIED',
+    severity: 'inconclusive',
+    message:
+      'A syntactically valid signer list does not prove that any specific recovery operation is authorized. ' +
+      'Authorization depends on the anchor policy, threshold weights, and transaction context.',
+  });
+
+  void knownKeys;
+
+  return {
+    responseIsObject: true,
+    hasSignersArray: signersIsArray,
+    signerCount: signersIsArray ? (rawSigners as unknown[]).length : 0,
+    validSignerKeyCount: validKeyCount,
+    validSignerWeightCount: validWeightCount,
+    unknownTopLevelFields,
+    redactedFields,
+    findings,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main function
 // ---------------------------------------------------------------------------
 
@@ -275,18 +526,14 @@ export async function inspectSep30Recovery(
       warnings: [],
       disclaimer: DISCLAIMER,
       auditedAt,
+      ...(options.audit ? { schemaAudit: undefined } : {}),
     };
   }
 
   // 2. Parse recovery response
   const { parsed, parseError } = parseRecoveryResponse(options.recoveryResponse);
   if (parseError) {
-    findings.push({
-      code: 'PARSE_ERROR',
-      severity: 'critical',
-      message: parseError,
-    });
-    return {
+    const result: Sep30RecoveryInspectionResult = {
       accountId: options.accountId,
       status: 'error',
       recoverySignerCount: 0,
@@ -294,11 +541,19 @@ export async function inspectSep30Recovery(
       matchingSignerCount: 0,
       signerComparison: [],
       thresholdAnalysis: [],
-      findings,
+      findings: [
+        {
+          code: 'PARSE_ERROR',
+          severity: 'critical',
+          message: parseError,
+        },
+      ],
       warnings,
       disclaimer: DISCLAIMER,
       auditedAt,
     };
+    if (options.audit) result.schemaAudit = runSchemaAudit(null);
+    return result;
   }
 
   // 3. Extract recovery signers
@@ -430,7 +685,7 @@ export async function inspectSep30Recovery(
     (s) => s.status === 'matching',
   ).length;
 
-  return {
+  const result: Sep30RecoveryInspectionResult = {
     accountId: options.accountId,
     status,
     recoverySignerCount: rawRecoverySigners.length,
@@ -443,4 +698,17 @@ export async function inspectSep30Recovery(
     disclaimer: DISCLAIMER,
     auditedAt,
   };
+
+  // 8. ISSUE-147: populate schema audit when requested
+  if (options.audit) {
+    const schemaAudit = runSchemaAudit(parsed);
+    result.schemaAudit = schemaAudit;
+    // Merge schema-audit findings into the top-level findings list so callers
+    // that only inspect `result.findings` still see them.
+    for (const sf of schemaAudit.findings) {
+      result.findings.push(sf);
+    }
+  }
+
+  return result;
 }
