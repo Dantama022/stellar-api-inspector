@@ -231,6 +231,3 @@ export function formatFederationResponseReport(
 }
 
 export default formatFederationResponseReport;
-</｜｜DSML｜｜ parameter>
-</｜｜DSML｜｜ invoke>
-</｜｜DSML｜｜ calls>

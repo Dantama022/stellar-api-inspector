@@ -31,3 +31,16 @@ export function validateHorizonUrl(url: string): { valid: boolean; error?: strin
 export function normalizeHorizonUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
+
+export function isValidUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}

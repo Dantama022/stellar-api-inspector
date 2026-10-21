@@ -136,6 +136,14 @@ export interface FederationValidationOptions {
   logger?: (message: string) => void;
 }
 
+export type FederationResponseValidationOptions = FederationValidationOptions;
+export type FederationResponseValidationReport = FederationValidationResult;
+export type FederationLookupQuery = string;
+export type FederationLookupResult = Record<string, unknown>;
+export type FederationResponseFinding = FederationFinding;
+export type FederationResponseFindingCode = string;
+export type FederationResponseFindingSeverity = FindingSeverity;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

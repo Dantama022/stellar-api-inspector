@@ -153,10 +153,10 @@ export class LedgerEntryOwnershipAuditInspector {
       lines.push('  (no discoverable account-associated resources)');
     } else {
       for (const category of Object.keys(grouped).sort() as ResourceCategory[]) {
-        const byRelationship = grouped[category];
+        const byRelationship = grouped[category] ?? {};
         lines.push(`  ${category}:`);
         for (const relationship of Object.keys(byRelationship).sort() as RelationshipType[]) {
-          const items = byRelationship[relationship];
+          const items = byRelationship[relationship] ?? [];
           lines.push(`    ${relationship} (${items.length}):`);
           for (const item of items) {
             const label = item.identifier.label ? ` (${item.identifier.label})` : '';
