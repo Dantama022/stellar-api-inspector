@@ -46,6 +46,7 @@ import {
 } from '../services/transaction-analyzer';
 import { runInteractiveMode } from '../prompts/main-menu';
 import { inspectTls } from '../services/tls-inspector';
+import { auditAssetMetadata } from '../services/asset-metadata-audit';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -780,6 +781,55 @@ program
 
     writeResult(result, options, text);
   });
+
+program
+  .command('asset-audit <assetCode> <issuer>')
+  .description('Audit an asset identifier against Horizon and issuer-published metadata')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      assetCode: string,
+      issuer: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const result = await auditAssetMetadata(options.horizon, assetCode, issuer);
+      const rows = [
+        ['Field', 'Value'],
+        ['Status', result.status.toUpperCase()],
+        ['Asset Code', result.assetCode],
+        ['Issuer', result.issuer],
+        ['Identifier Valid', result.validation.valid ? 'YES' : 'NO'],
+        ['Asset Type', result.validation.assetType || 'Unknown'],
+        ['Horizon Asset', result.observed.horizonAsset ? 'Found' : 'Not confirmed'],
+        ['Issuer Home Domain', result.observed.homeDomain || 'Not configured / unavailable'],
+        [
+          'Matching Published Entries',
+          result.observed.publishedEntries === null
+            ? 'Not inspected'
+            : String(
+                result.observed.publishedEntries.filter(
+                  (entry) => entry.code === assetCode && entry.issuer === issuer,
+                ).length,
+              ),
+        ],
+      ];
+      let text = `\n${chalk.bold.green('=== Stellar Asset Metadata Audit ===')}\n\n`;
+      text += formatTable(rows);
+      text +=
+        '\nDisplay precision in stellar.toml is presentation metadata only; Stellar amounts are not rounded or changed by this audit.\n';
+      if (result.findings.length > 0) {
+        text += '\n--- Findings ---\n';
+        for (const finding of result.findings) {
+          text += `${finding.severity.toUpperCase()} [${finding.code}]: ${finding.message}\n`;
+        }
+      }
+      writeResult(result, options, text);
+    },
+  );
 
 // ---------------------------------------------------------------------------
 // 6. Soroban Contract Inspector

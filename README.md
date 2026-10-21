@@ -54,6 +54,34 @@ npm run dev
 
 The interactive menu can collect inputs for Horizon inspection, Soroban inspection, account audit, health dashboard, transaction XDR decoding, operations history, and contract inspection. Before execution it prints a command summary and asks for confirmation.
 
+### Asset Metadata Consistency Audit
+
+Compare an issued asset's code and issuer against Horizon and the issuer's published
+`stellar.toml` currency declarations:
+
+```bash
+npm run dev -- asset-audit USDC G...
+npm run dev -- asset-audit USDC G... --horizon https://horizon.stellar.org --json
+```
+
+The asset code and issuer are validated with the Stellar SDK's asset identifier
+rules. The audit checks the asset through Horizon, reads the issuer account's
+configured home domain, and retrieves `https://<home-domain>/.well-known/stellar.toml`.
+It associates currency declarations by the exact, case-sensitive `(code, issuer)`
+pair, and reports missing declarations, duplicates, and declarations that reuse
+the requested code or issuer with a different pair. Optional `name`, `desc`,
+`image`, `conditions`, and `display_decimals` fields are inspected when present;
+their absence is not a protocol violation. Unrecognized currency fields are
+retained in the JSON result and reported as unevaluated.
+
+`display_decimals` is issuer-published presentation guidance, not a Stellar
+protocol constraint. Stellar asset amounts use protocol-defined numeric
+representations; this audit never rounds, reformats, or changes amounts based on
+published display precision. Horizon or metadata that cannot be retrieved,
+malformed TOML, and incomplete responses are reported with findings and an
+`inconclusive` status rather than as successful comparisons. The command only
+performs read-only Horizon and HTTPS requests.
+
 ### Network Passphrase Inspection
 Inspect Stellar network passphrases and determine whether a supplied value matches a built-in network or represents a custom configuration:
 

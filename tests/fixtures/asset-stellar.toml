@@ -1,0 +1,7 @@
+[[CURRENCIES]]
+code = "USDC"
+issuer = "GAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQDZ7H"
+name = "Example Dollar"
+desc = "Example test asset"
+image = "https://example.com/usdc.png"
+display_decimals = 2
