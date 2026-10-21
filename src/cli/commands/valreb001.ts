@@ -21,6 +21,8 @@ import {
 import { formatAccountBalanceComparison } from '../../output/account-balance-snapshot';
 import { inspectOperationSupport } from '../../services/operation-support-matrix';
 import { formatOperationSupportMatrix } from '../../output/operation-support-matrix';
+import { auditTransactionSignatureCoverage } from '../../services/transaction-signature-coverage-audit';
+import { formatTransactionSignatureCoverageAudit } from '../../output/transaction-signature-coverage-audit';
 
 const noopSpinner = {
   succeed: (_msg?: string) => undefined,
@@ -62,6 +64,52 @@ function writeResult(
 }
 
 export function registerValreb001Commands(program: Command): void {
+  program
+    .command('signature-coverage-audit <envelopeXdr>')
+    .description('Read-only audit of transaction signature coverage and account thresholds')
+    .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+    .option('-n, --network <passphrase>', 'Network alias or passphrase', 'testnet')
+    .option(
+      '-s, --signer <publicKey>',
+      'Additional public key to verify signature hints (repeatable)',
+      collect,
+      [],
+    )
+    .option('-j, --json', 'Output raw JSON')
+    .option('-o, --output <path>', 'Save output to file')
+    .action(
+      async (
+        envelopeXdr: string,
+        options: {
+          horizon: string;
+          network: string;
+          signer: string[];
+          json?: boolean;
+          output?: string;
+        },
+      ) => {
+        if (options.json) logger.setJsonMode(true);
+        const spinner = makeSpinner(
+          'Inspecting signatures and account thresholds...',
+          !!options.json,
+        ).start();
+        const report = await auditTransactionSignatureCoverage({
+          envelopeXdr,
+          horizonUrl: options.horizon,
+          networkPassphrase: options.network,
+          knownSigners: options.signer,
+        });
+        if (report.status === 'failed') {
+          spinner.fail('Signature coverage audit failed.');
+          if (options.json) outputJsonError(report.findings[0]);
+          logger.error(report.findings[0]);
+          process.exit(1);
+        }
+        spinner.succeed('Signature coverage audit complete.');
+        writeResult(report, options, formatTransactionSignatureCoverageAudit(report));
+      },
+    );
+
   // -------------------------------------------------------------------------
   // Network Passphrase and Signature Hash Audit
   // -------------------------------------------------------------------------
