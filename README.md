@@ -662,6 +662,19 @@ npm run dev -- decode <xdrBase64> --network testnet --json
 
 Supports multi-operation transactions, memo fields, time bounds, and signature inspection.
 
+### Transaction Source-Account Audit
+Inspect how the transaction source and each operation's optional source are resolved. The audit accepts the same base64 `TransactionEnvelope` XDR as `decode`, and supports standard and fee-bump envelopes:
+
+```bash
+npm run dev -- source-audit <xdrBase64>
+npm run dev -- source-audit <xdrBase64> --json
+npm run dev -- source-audit <xdrBase64> --online --horizon https://horizon-testnet.stellar.org
+```
+
+Operations without an explicit source inherit the inner transaction source. An explicit operation source is a valid override, not an inconsistency. Muxed `M...` sources are reported with both their muxed ID and underlying `G...` account; optional Horizon checks query the underlying account only. For fee-bump envelopes, the report separates the outer fee source from the inner transaction source used for operations.
+
+Malformed XDR is rejected. Unrecognized source encodings and failed or missing Horizon account lookups are reported as unresolved/inconclusive context, not as proof the transaction is invalid. This report only maps declared sources; it does not verify signatures, signer thresholds, transaction authorization, operation validity, or network submission. The command performs read-only account lookups only when `--online` is supplied and never signs, submits, or modifies transactions or accounts.
+
 ### Ledger Header Inspection
 Retrieve and summarize information about a specific Stellar ledger using Horizon (`GET /ledgers/{sequence}`):
 

@@ -19,6 +19,7 @@ import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
+import { auditTransactionSources } from '../inspectors/source-audit';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
 import {
   formatBytes,
@@ -1347,6 +1348,84 @@ program
 
     writeResult(decoded, options, text);
   });
+
+// ---------------------------------------------------------------------------
+// Transaction Source Account Audit
+// ---------------------------------------------------------------------------
+program
+  .command('source-audit <xdr>')
+  .description('Audit transaction and operation source-account mappings (offline by default)')
+  .option('--online', 'Look up identified base accounts on Horizon (read-only)')
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      xdr: string,
+      options: { online?: boolean; horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+
+      const result = await auditTransactionSources(xdr, {
+        online: options.online,
+        horizonUrl: options.horizon,
+      });
+      if (!result.audit) {
+        const message = result.error || 'Failed to audit transaction source accounts';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const audit = result.audit;
+      let text = `\n${chalk.bold.green('=== Transaction Source Account Audit ===')}\n\n`;
+      text += formatTable([
+        ['Field', 'Value'],
+        ['Envelope Type', audit.transaction.envelopeType],
+        ['Transaction Source', audit.transaction.sourceAccount.address],
+        ['Sequence Number', audit.transaction.sequenceNumber],
+        ['Status', audit.status],
+        [
+          'Account Context',
+          audit.accountContext.requested ? 'Online lookup requested' : 'Not requested',
+        ],
+      ]);
+      if (audit.transaction.feeSourceAccount) {
+        text += `\n${chalk.cyan('Fee Source:')} ${audit.transaction.feeSourceAccount.address}\n`;
+      }
+
+      text += `\n${chalk.bold.cyan(`--- Operations (${audit.operations.length}) ---`)}\n`;
+      for (const operation of audit.operations) {
+        text += `\n${chalk.yellow(`#${operation.index + 1} ${operation.type}`)}\n`;
+        text += formatTable([
+          ['Property', 'Value'],
+          ['Source Mode', operation.sourceMode],
+          [
+            'Declared Source',
+            operation.declaredSourceAccount?.address ?? '(inherits transaction source)',
+          ],
+          ['Effective Source', operation.effectiveSourceAccount.address],
+          [
+            'Same Base Account',
+            operation.sameBaseAccountAsTransaction === null
+              ? 'Unknown'
+              : operation.sameBaseAccountAsTransaction
+                ? 'Yes'
+                : 'No',
+          ],
+        ]);
+      }
+
+      if (audit.findings.length > 0) {
+        text += `\n${chalk.bold.cyan('--- Findings ---')}\n`;
+        for (const finding of audit.findings) {
+          text += `${chalk[finding.severity === 'warning' ? 'yellow' : 'cyan'](`[${finding.severity}]`)} ${finding.message}\n`;
+        }
+      }
+
+      writeResult(audit, options, text);
+    },
+  );
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
