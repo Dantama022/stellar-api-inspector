@@ -84,6 +84,7 @@ import { registerDevMakeemCommands } from './commands/dev-makeem';
 import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
+import { registerAccountTxAuditCommands } from './commands/account-tx-audits';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
@@ -1719,6 +1720,7 @@ registerSepComplianceCommands(program);
 registerSepCompliance2Commands(program);
 registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
+registerAccountTxAuditCommands(program);
 
 
 
