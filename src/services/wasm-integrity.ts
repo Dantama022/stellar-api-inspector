@@ -58,7 +58,7 @@ interface JsonRpcResponse<T> {
   error?: { code: number; message: string };
 }
 
-interface LedgerEntryResponse {
+export interface LedgerEntryResponse {
   xdr?: string;
   entry?: { xdr?: string };
   val?: { xdr?: string };
@@ -101,7 +101,7 @@ function extractXdr(entry: LedgerEntryResponse): string | undefined {
   return entry.xdr ?? entry.entry?.xdr ?? entry.val?.xdr;
 }
 
-async function getLedgerEntries(
+export async function getLedgerEntries(
   rpcUrl: string,
   keys: string[],
 ): Promise<LedgerEntryResponse[]> {
