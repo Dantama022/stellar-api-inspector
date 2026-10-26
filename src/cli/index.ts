@@ -93,6 +93,7 @@ import { auditContractSpec } from '../inspectors/contract-spec-audit';
 import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
 import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import { registerSepComplianceCommands } from './commands/sep-compliance';
+import { registerDiagnosticsPack5Commands } from './commands/diagnostics-pack-5';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -1719,6 +1720,7 @@ registerSepComplianceCommands(program);
 registerSepCompliance2Commands(program);
 registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
+registerDiagnosticsPack5Commands(program);
 
 
 
