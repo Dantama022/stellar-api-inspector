@@ -93,6 +93,14 @@ import { auditContractSpec } from '../inspectors/contract-spec-audit';
 import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
 import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import { registerSepComplianceCommands } from './commands/sep-compliance';
+import { inspectCoreStorage } from '../services/core-storage-diagnostics';
+import { formatCoreStorageReport } from '../output/core-storage-report';
+import { auditBackupIntegrity } from '../services/backup-integrity-audit';
+import { formatBackupIntegrityReport } from '../output/backup-integrity-report';
+import { auditBackupRetention } from '../services/backup-retention-audit';
+import { formatBackupRetentionReport } from '../output/backup-retention-report';
+import { auditJsonRpcCompliance } from '../services/jsonrpc-compliance-audit';
+import { formatJsonRpcComplianceReport } from '../output/jsonrpc-compliance-report';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -3613,6 +3621,308 @@ program
       writeResult(result, options, text);
 
       if (result.hasInconsistencies) process.exitCode = 1;
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-221: Stellar Core Data Directory Capacity and Disk I/O Diagnostics
+// ---------------------------------------------------------------------------
+program
+  .command('core-storage')
+  .description(
+    'Inspect filesystem capacity and disk I/O characteristics for a Stellar Core data directory (read-only)',
+  )
+  .option('-d, --data-dir <path>', 'Stellar Core data directory to inspect', '.')
+  .option(
+    '--sample-interval <ms>',
+    'Interval in milliseconds between disk I/O observations',
+    '1000',
+  )
+  .option('--samples <count>', 'Number of disk I/O observations to collect', '1')
+  .option(
+    '--warn-threshold <percent>',
+    'Filesystem utilization percentage at or above which a warning is raised',
+    '85',
+  )
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (options: {
+      dataDir: string;
+      sampleInterval: string;
+      samples: string;
+      warnThreshold: string;
+      json?: boolean;
+      output?: string;
+      verbose?: boolean;
+    }) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const sampleInterval = Number.parseInt(options.sampleInterval, 10);
+      const samples = Number.parseInt(options.samples, 10);
+      const warnThreshold = Number.parseFloat(options.warnThreshold);
+
+      if (!Number.isFinite(sampleInterval) || sampleInterval < 0) {
+        const message = '--sample-interval must be a non-negative integer (milliseconds)';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+      if (!Number.isInteger(samples) || samples < 1) {
+        const message = '--samples must be a positive integer';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+      if (!Number.isFinite(warnThreshold) || warnThreshold < 0 || warnThreshold > 100) {
+        const message = '--warn-threshold must be a number between 0 and 100';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Inspecting storage for ${options.dataDir}...`,
+        !!options.json,
+      ).start();
+
+      let report;
+      try {
+        report = await inspectCoreStorage({
+          dataDir: options.dataDir,
+          sampleIntervalMs: sampleInterval,
+          samples,
+          warnThresholdPercent: warnThreshold,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (report.capacity.status === 'unavailable') {
+        spinner.fail('Storage inspection failed — filesystem capacity unavailable.');
+      } else if (report.warnings.length > 0) {
+        spinner.succeed('Storage inspection complete — potential storage pressure detected.');
+      } else {
+        spinner.succeed('Storage inspection complete.');
+      }
+
+      writeResult(report, options, formatCoreStorageReport(report));
+      if (report.capacity.status === 'unavailable') process.exitCode = 1;
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-222: Stellar Core Backup Integrity and Recovery Readiness Audit
+// ---------------------------------------------------------------------------
+program
+  .command('backup-integrity-audit <manifests...>')
+  .description(
+    'Audit locally supplied Stellar Core backup manifests for integrity and recovery readiness (read-only)',
+  )
+  .option(
+    '--rpo <duration>',
+    'Recovery point objective for backup age (e.g. 24h, 7d, 3600s)',
+  )
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      manifests: string[],
+      options: { rpo?: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!manifests || manifests.length === 0) {
+        const message = 'Provide at least one backup manifest path.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Auditing ${manifests.length} backup manifest${manifests.length > 1 ? 's' : ''}...`,
+        !!options.json,
+      ).start();
+
+      let report;
+      try {
+        report = await auditBackupIntegrity({
+          manifestPaths: manifests,
+          rpo: options.rpo,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (report.overallStatus === 'fail') {
+        spinner.fail('Backup integrity audit complete — integrity failures detected.');
+      } else if (report.overallStatus === 'warn') {
+        spinner.succeed('Backup integrity audit complete — warnings detected.');
+      } else {
+        spinner.succeed('Backup integrity audit complete.');
+      }
+
+      writeResult(report, options, formatBackupIntegrityReport(report));
+      if (report.overallStatus === 'fail') process.exitCode = 1;
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-223: Stellar Core Backup Retention and Lifecycle Policy Audit
+// ---------------------------------------------------------------------------
+program
+  .command('backup-retention-audit <inventories...>')
+  .description(
+    'Audit locally supplied Stellar Core backup inventories against retention policies (read-only)',
+  )
+  .option(
+    '--policy <json>',
+    'Retention policy JSON: {"category":{"retention":"30d","minCount":2,"warnBefore":"7d"}}',
+  )
+  .option('--policy-file <path>', 'Path to a JSON file containing the retention policy')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      inventories: string[],
+      options: {
+        policy?: string;
+        policyFile?: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!inventories || inventories.length === 0) {
+        const message = 'Provide at least one backup inventory path.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      let policy: unknown;
+      if (options.policyFile) {
+        try {
+          policy = JSON.parse(fs.readFileSync(options.policyFile, 'utf8'));
+        } catch (err: unknown) {
+          const message = `Failed to read --policy-file: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+        }
+      } else if (options.policy) {
+        try {
+          policy = JSON.parse(options.policy);
+        } catch {
+          const message = '--policy value is not valid JSON.';
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+        }
+      }
+
+      const spinner = makeSpinner(
+        `Auditing ${inventories.length} backup inventor${inventories.length > 1 ? 'ies' : 'y'}...`,
+        !!options.json,
+      ).start();
+
+      let report;
+      try {
+        report = await auditBackupRetention({
+          inventoryPaths: inventories,
+          policy,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (report.overallStatus === 'fail') {
+        spinner.fail('Backup retention audit complete — policy violations detected.');
+      } else if (report.overallStatus === 'warn') {
+        spinner.succeed('Backup retention audit complete — warnings detected.');
+      } else {
+        spinner.succeed('Backup retention audit complete.');
+      }
+
+      writeResult(report, options, formatBackupRetentionReport(report));
+      if (report.overallStatus === 'fail') process.exitCode = 1;
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-224: Soroban RPC JSON-RPC Protocol Compliance Audit
+// ---------------------------------------------------------------------------
+program
+  .command('jsonrpc-compliance-audit <fixtures...>')
+  .description(
+    'Validate locally supplied Soroban RPC request-response fixtures against JSON-RPC 2.0 (offline)',
+  )
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      fixtures: string[],
+      options: { json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!fixtures || fixtures.length === 0) {
+        const message = 'Provide at least one JSON-RPC fixture path.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Validating ${fixtures.length} JSON-RPC fixture${fixtures.length > 1 ? 's' : ''}...`,
+        !!options.json,
+      ).start();
+
+      let report;
+      try {
+        report = await auditJsonRpcCompliance({ fixturePaths: fixtures });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      if (report.overallStatus === 'fail') {
+        spinner.fail('JSON-RPC compliance audit complete — protocol violations detected.');
+      } else if (report.overallStatus === 'warn') {
+        spinner.succeed('JSON-RPC compliance audit complete — warnings detected.');
+      } else {
+        spinner.succeed('JSON-RPC compliance audit complete.');
+      }
+
+      writeResult(report, options, formatJsonRpcComplianceReport(report));
+      if (report.overallStatus === 'fail') process.exitCode = 1;
     },
   );
 
