@@ -93,6 +93,7 @@ import { auditContractSpec } from '../inspectors/contract-spec-audit';
 import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
 import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import { registerSepComplianceCommands } from './commands/sep-compliance';
+import { registerStellarCoreOpsCommands } from './commands/stellar-core-ops';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -808,6 +809,7 @@ program
   );
 
 registerFreezyyyArchCommands(program);
+registerStellarCoreOpsCommands(program);
 
 program
   .command('account-offers <accountId>')

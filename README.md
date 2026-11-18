@@ -1329,6 +1329,236 @@ npm run dev -- analyze-tx <hash> --json --output analysis.json
 }
 ```
 
+### Stellar Core Configuration Drift Detection
+
+Compare one or more locally supplied Stellar Core configuration files against a designated baseline and report added, removed, and modified settings:
+
+```bash
+npm run dev -- core-config-drift --baseline ./baseline.cfg --current ./current.cfg
+```
+
+Compare multiple snapshots against the same baseline:
+
+```bash
+npm run dev -- core-config-drift \
+  --baseline ./baseline.cfg \
+  --current ./node-a.cfg \
+  --current ./node-b.cfg
+```
+
+Options:
+
+| Option | Description |
+|---|---|
+| `--baseline <path>` | Configuration file treated as the approved baseline (required) |
+| `--current <path>` | Configuration snapshot to compare; repeat for multiple snapshots (required) |
+| `--exclude <path>` | Configuration path (e.g. `HTTP_PORT`) to ignore; repeatable |
+| `--approve <path>` | Configuration path whose differences are treated as approved changes; repeatable |
+| `--severity <level>` | Severity assigned to unexpected drift findings (`info`, `warning`, `error`) |
+| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
+| `--output <path>` | Write the report to a file |
+
+Findings are categorized by change type (`added`, `removed`, `modified`) and preserve the full section/key path (e.g. `[HTTP_PORT]` or `[QUORUM_SET]`). Sensitive settings (keys matching secret, password, seed, or key material patterns) are reported as changed without exposing their values — the report shows `<redacted>` in place of the actual content. Exclusion and approval rules prevent intentionally variable or approved differences from appearing as unexpected drift.
+
+The report distinguishes observed differences from security or operational conclusions: a difference is reported as an observation, not automatically as a security issue. The command only reads the supplied files and never modifies them.
+
+```bash
+npm run dev -- core-config-drift --baseline ./baseline.cfg --current ./current.cfg --json
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "baseline": "./baseline.cfg",
+    "snapshots": [
+      {
+        "path": "./current.cfg",
+        "summary": { "added": 1, "removed": 0, "modified": 2, "approved": 1, "excluded": 0 },
+        "changes": [
+          {
+            "changeType": "modified",
+            "path": "HTTP_PORT",
+            "section": null,
+            "baselineValue": "11625",
+            "currentValue": "11626",
+            "sensitive": false,
+            "approved": false,
+            "severity": "warning"
+          },
+          {
+            "changeType": "modified",
+            "path": "NODE_SEED",
+            "section": null,
+            "baselineValue": "<redacted>",
+            "currentValue": "<redacted>",
+            "sensitive": true,
+            "approved": false,
+            "severity": "warning"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Malformed or unsupported configuration files produce actionable errors with the offending file path and line where available.
+
+### Stellar Core Binary Integrity Audit
+
+Inspect a locally supplied Stellar Core executable without executing it:
+
+```bash
+npm run dev -- core-binary-audit ./stellar-core
+```
+
+Options:
+
+| Option | Description |
+|---|---|
+| `--binary <path>` | Path to the Stellar Core executable to inspect |
+| `--checksums <path>` | Local trusted release checksum manifest (e.g. `SHA256SUMS`) |
+| `--expected-version <version>` | Expected release version to compare against reported metadata |
+| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
+| `--output <path>` | Write the report to a file |
+
+The audit calculates a SHA-256 checksum, identifies the executable format and architecture where supported (ELF on Linux, Mach-O on macOS, PE on Windows), and extracts available version and embedded build metadata. Unsupported or unrecognized formats produce actionable errors.
+
+When a trusted checksum manifest is supplied, the calculated checksum is compared against the matching entry. A matching checksum establishes **integrity relative to the supplied reference only** — it does not prove publisher authenticity, and the report never claims a binary is officially published or safe based solely on a checksum match. Missing metadata is reported separately from confirmed checksum mismatches.
+
+The command reads the binary only; it never executes, modifies, or replaces the supplied file.
+
+```bash
+npm run dev -- core-binary-audit ./stellar-core --checksums ./SHA256SUMS --json
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "path": "./stellar-core",
+    "format": "elf",
+    "architecture": "x86_64",
+    "sha256": "9f2c...",
+    "version": "21.0.0",
+    "buildMetadata": { "commit": "abc123", "buildTimestamp": "2024-01-15T12:00:00Z" },
+    "checksumVerification": {
+      "manifest": "./SHA256SUMS",
+      "expected": "9f2c...",
+      "match": true,
+      "publisherAuthenticityVerified": false
+    },
+    "findings": []
+  }
+}
+```
+
+### Stellar Core Host Clock Diagnostics
+
+Inspect the host's system time and time synchronization status without connecting to a Stellar network:
+
+```bash
+npm run dev -- core-clock
+```
+
+Options:
+
+| Option | Description |
+|---|---|
+| `--max-offset <ms>` | Warning threshold for estimated clock offset in milliseconds |
+| `--observe <label=timestamp>` | Node timestamp observation to compare; repeatable |
+| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
+| `--output <path>` | Write the report to a file |
+
+The command reports the current system time, synchronization status, configured time source, and estimated clock offset where the operating system exposes them (e.g. `timedatectl` on Linux, `sntp`/`systemsetup` on macOS). Unavailable, disabled, or unhealthy synchronization services are reported as such. Unsupported platforms and insufficient permissions produce clear diagnostic messages rather than failures.
+
+Multiple node observations can be compared to identify apparent clock differences:
+
+```bash
+npm run dev -- core-clock \
+  --observe node-a=2024-01-15T12:00:00Z \
+  --observe node-b=2024-01-15T12:00:02Z
+```
+
+The report distinguishes operating system synchronization status from independently verified time accuracy: a synchronized clock is not assumed to be accurate, and a timestamp difference between nodes does not prove a consensus failure. Measured offsets are distinguished from estimates and unavailable measurements.
+
+The command performs read-only inspection and never changes system time, time zones, or synchronization settings.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "systemTime": "2024-01-15T12:00:00.000Z",
+    "synchronized": true,
+    "timeSource": "ntp:pool.ntp.org",
+    "offsetMs": 12,
+    "offsetSource": "measured",
+    "thresholdMs": 500,
+    "thresholdExceeded": false,
+    "observations": [
+      { "label": "node-a", "timestamp": "2024-01-15T12:00:00.000Z" },
+      { "label": "node-b", "timestamp": "2024-01-15T12:00:02.000Z" }
+    ],
+    "apparentDifferences": [
+      { "from": "node-a", "to": "node-b", "differenceMs": 2000 }
+    ],
+    "warnings": []
+  }
+}
+```
+
+### Stellar Core Data Directory Permission Audit
+
+Inspect the permissions and ownership of a Stellar Core data directory and its relevant subdirectories:
+
+```bash
+npm run dev -- core-data-permissions --dir /var/lib/stellar
+```
+
+Options:
+
+| Option | Description |
+|---|---|
+| `--dir <path>` | Stellar Core data directory to inspect |
+| `--expected-owner <user>` | Expected owner for inspected paths |
+| `--policy <path>` | JSON permission policy describing category-specific requirements |
+| `--redact-paths` | Redact sensitive path information in the report |
+| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
+| `--output <path>` | Write the report to a file |
+
+The audit identifies configuration, database, log, temporary, and runtime directories where present, collects ownership and permission metadata, and detects world-writable and unexpectedly group-writable paths, ownership that differs from the configured expected owner, inaccessible paths, and symbolic links that resolve outside the inspected directory. Inaccessible paths are reported without terminating the audit.
+
+Configurable policies distinguish sensitive files from operational files that legitimately require write access, so legitimate write access is not automatically classified as a security issue. Findings are observations with observed permissions and recommended remediation — not security conclusions.
+
+The audit operates in read-only mode and never changes ownership, permissions, or file contents.
+
+```bash
+npm run dev -- core-data-permissions --dir /var/lib/stellar --expected-owner stellar --json
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "directory": "/var/lib/stellar",
+    "expectedOwner": "stellar",
+    "findings": [
+      {
+        "path": "/var/lib/stellar/stellar-core.cfg",
+        "category": "configuration",
+        "observedMode": "0666",
+        "observedOwner": "stellar",
+        "issue": "world-writable",
+        "remediation": "Restrict write access to the Stellar Core service account (chmod 0640)."
+      }
+    ],
+    "inaccessiblePaths": [],
+    "symlinkEscapes": []
+  }
+}
+```
+
 ### Options
 - `-j, --json`: Return raw JSON instead of formatted CLI tables (great for shell pipelines).
 - `-o, --output <path>`: Save inspection output directly to a file (JSON or Markdown).

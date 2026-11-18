@@ -28,6 +28,10 @@ export type InteractiveAction =
   | 'network-compat'
   | 'entry-ownership'
   | 'sep30-quorum'
+  | 'config-drift'
+  | 'binary-integrity'
+  | 'clock-sync'
+  | 'data-dir-permissions'
   | 'exit';
 
 export interface InteractiveCommand {
@@ -98,6 +102,10 @@ export async function collectInteractiveCommand(
         { name: 'Network Fee & Protocol Compatibility Audit', value: 'network-compat' },
         { name: 'Ledger-Entry Ownership Audit', value: 'entry-ownership' },
         { name: 'SEP-30 Recovery Signer Quorum Audit', value: 'sep30-quorum' },
+        { name: 'Stellar Core Configuration Drift Detection', value: 'config-drift' },
+        { name: 'Stellar Core Binary Integrity Audit', value: 'binary-integrity' },
+        { name: 'Stellar Core Host Clock Diagnostics', value: 'clock-sync' },
+        { name: 'Stellar Core Data Directory Permission Audit', value: 'data-dir-permissions' },
         { name: 'Exit', value: 'exit' },
       ],
     },
@@ -144,6 +152,14 @@ export async function collectInteractiveCommand(
       return collectEntryOwnershipCommand(inquirer);
     case 'sep30-quorum':
       return collectSep30QuorumCommand(inquirer);
+    case 'config-drift':
+      return collectConfigDriftCommand(inquirer);
+    case 'binary-integrity':
+      return collectBinaryIntegrityCommand(inquirer);
+    case 'clock-sync':
+      return collectClockSyncCommand(inquirer);
+    case 'data-dir-permissions':
+      return collectDataDirPermissionsCommand(inquirer);
     case 'exit':
       return null;
   }
@@ -909,5 +925,201 @@ async function collectSep30QuorumCommand(inquirer: PromptModule): Promise<Intera
     command: 'sep30-quorum',
     args: [answers.accountId, '--recovery-file', answers.recoveryFile, '--horizon', answers.horizon],
     summary: `stellar-api-inspector sep30-quorum ${answers.accountId} --recovery-file ${answers.recoveryFile} --horizon ${answers.horizon}`,
+  };
+}
+
+async function collectConfigDriftCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    configs: string;
+    baseline: string;
+    exclusions: string;
+    approved: string;
+    severity: string;
+  }>([
+    {
+      type: 'input',
+      name: 'configs',
+      message: 'Stellar Core configuration files, comma-separated',
+      validate: (value: string) => {
+        const configs = splitCsv(value);
+        if (configs.length < 2) return 'At least two configuration files are required';
+        return true;
+      },
+    },
+    {
+      type: 'input',
+      name: 'baseline',
+      message: 'Optional baseline configuration file (defaults to the first file)',
+    },
+    {
+      type: 'input',
+      name: 'exclusions',
+      message: 'Optional configuration paths to exclude, comma-separated',
+    },
+    {
+      type: 'input',
+      name: 'approved',
+      message: 'Optional approved configuration paths, comma-separated',
+    },
+    {
+      type: 'input',
+      name: 'severity',
+      message: 'Optional severity for unexpected drift (info, low, medium, high)',
+    },
+  ]);
+
+  const configs = splitCsv(answers.configs);
+  const args = [...configs];
+  if (answers.baseline.trim()) args.push('--baseline', answers.baseline.trim());
+  for (const exclusion of splitCsv(answers.exclusions)) {
+    args.push('--exclude', exclusion);
+  }
+  for (const approved of splitCsv(answers.approved)) {
+    args.push('--approved', approved);
+  }
+  if (answers.severity.trim()) args.push('--severity', answers.severity.trim());
+
+  return {
+    command: 'config-drift',
+    args,
+    summary: `stellar-api-inspector config-drift ${configs.join(' ')}`,
+  };
+}
+
+async function collectBinaryIntegrityCommand(
+  inquirer: PromptModule,
+): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    binary: string;
+    manifests: string;
+    expectedVersion: string;
+  }>([
+    {
+      type: 'input',
+      name: 'binary',
+      message: 'Path to the Stellar Core executable',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'manifests',
+      message: 'Optional trusted checksum manifest files, comma-separated',
+    },
+    {
+      type: 'input',
+      name: 'expectedVersion',
+      message: 'Optional expected release version',
+    },
+  ]);
+
+  const args = [answers.binary.trim()];
+  for (const manifest of splitCsv(answers.manifests)) {
+    args.push('--manifest', manifest);
+  }
+  if (answers.expectedVersion.trim()) {
+    args.push('--expected-version', answers.expectedVersion.trim());
+  }
+
+  return {
+    command: 'binary-integrity',
+    args,
+    summary: `stellar-api-inspector binary-integrity ${answers.binary.trim()}`,
+  };
+}
+
+async function collectClockSyncCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    observations: string;
+    offsetThreshold: string;
+    uncertaintyThreshold: string;
+  }>([
+    {
+      type: 'input',
+      name: 'observations',
+      message: 'Optional node timestamp observation files, comma-separated',
+    },
+    {
+      type: 'input',
+      name: 'offsetThreshold',
+      message: 'Optional clock offset warning threshold in milliseconds',
+      validate: (value: string) =>
+        value.trim() === '' || validatePositiveInteger(value),
+    },
+    {
+      type: 'input',
+      name: 'uncertaintyThreshold',
+      message: 'Optional synchronization uncertainty threshold in milliseconds',
+      validate: (value: string) =>
+        value.trim() === '' || validatePositiveInteger(value),
+    },
+  ]);
+
+  const args: string[] = [];
+  for (const observation of splitCsv(answers.observations)) {
+    args.push('--observation', observation);
+  }
+  if (answers.offsetThreshold.trim()) {
+    args.push('--offset-threshold-ms', answers.offsetThreshold.trim());
+  }
+  if (answers.uncertaintyThreshold.trim()) {
+    args.push('--uncertainty-threshold-ms', answers.uncertaintyThreshold.trim());
+  }
+
+  return {
+    command: 'clock-sync',
+    args,
+    summary: `stellar-api-inspector clock-sync ${args.join(' ')}`.trim(),
+  };
+}
+
+async function collectDataDirPermissionsCommand(
+  inquirer: PromptModule,
+): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    dataDir: string;
+    expectedOwner: string;
+    policy: string;
+    redact: string;
+  }>([
+    {
+      type: 'input',
+      name: 'dataDir',
+      message: 'Stellar Core data directory',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'expectedOwner',
+      message: 'Optional expected owner (user or user:group)',
+    },
+    {
+      type: 'input',
+      name: 'policy',
+      message: 'Optional permission policy file (JSON)',
+    },
+    {
+      type: 'input',
+      name: 'redact',
+      message: 'Redact sensitive path information? (yes/no)',
+      default: 'no',
+      validate: (value: string) =>
+        ['yes', 'no', 'y', 'n', ''].includes(value.trim().toLowerCase()) ||
+        'Enter yes or no',
+    },
+  ]);
+
+  const args = [answers.dataDir.trim()];
+  if (answers.expectedOwner.trim()) {
+    args.push('--expected-owner', answers.expectedOwner.trim());
+  }
+  if (answers.policy.trim()) args.push('--policy', answers.policy.trim());
+  if (['yes', 'y'].includes(answers.redact.trim().toLowerCase())) {
+    args.push('--redact-paths');
+  }
+
+  return {
+    command: 'data-dir-permissions',
+    args,
+    summary: `stellar-api-inspector data-dir-permissions ${answers.dataDir.trim()}`,
   };
 }
