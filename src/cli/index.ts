@@ -93,14 +93,14 @@ import { auditContractSpec } from '../inspectors/contract-spec-audit';
 import { auditSep12Kyc } from '../inspectors/sep12-kyc-audit';
 import { inspectSep7Uri } from '../inspectors/sep7-uri-inspector';
 import { registerSepComplianceCommands } from './commands/sep-compliance';
-import { inspectCoreStorage } from '../services/core-storage-diagnostics';
-import { formatCoreStorageReport } from '../output/core-storage-report';
-import { auditBackupIntegrity } from '../services/backup-integrity-audit';
-import { formatBackupIntegrityReport } from '../output/backup-integrity-report';
-import { auditBackupRetention } from '../services/backup-retention-audit';
-import { formatBackupRetentionReport } from '../output/backup-retention-report';
-import { auditJsonRpcCompliance } from '../services/jsonrpc-compliance-audit';
-import { formatJsonRpcComplianceReport } from '../output/jsonrpc-compliance-report';
+import { inspectCoreMetrics } from '../services/core-metrics-inspection';
+import { formatCoreMetricsReport } from '../output/core-metrics-report';
+import { validateCoreMetricsExport } from '../services/core-metrics-validation';
+import { formatCoreMetricsValidationReport } from '../output/core-metrics-validation-report';
+import { inspectScpState } from '../services/scp-state-inspection';
+import { formatScpStateReport } from '../output/scp-state-report';
+import { auditAdminEndpoints } from '../services/admin-endpoint-audit';
+import { formatAdminEndpointAuditReport } from '../output/admin-endpoint-audit-report';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -816,6 +816,7 @@ program
   );
 
 registerFreezyyyArchCommands(program);
+registerStellarCoreOpsCommands(program);
 
 program
   .command('account-offers <accountId>')
@@ -3625,139 +3626,67 @@ program
   );
 
 // ---------------------------------------------------------------------------
-// ISSUE-221: Stellar Core Data Directory Capacity and Disk I/O Diagnostics
+// ISSUE-213: Stellar Core Prometheus Metrics Inspection and Trend Analysis
 // ---------------------------------------------------------------------------
 program
-  .command('core-storage')
+  .command('core-metrics <files...>')
   .description(
-    'Inspect filesystem capacity and disk I/O characteristics for a Stellar Core data directory (read-only)',
-  )
-  .option('-d, --data-dir <path>', 'Stellar Core data directory to inspect', '.')
-  .option(
-    '--sample-interval <ms>',
-    'Interval in milliseconds between disk I/O observations',
-    '1000',
-  )
-  .option('--samples <count>', 'Number of disk I/O observations to collect', '1')
-  .option(
-    '--warn-threshold <percent>',
-    'Filesystem utilization percentage at or above which a warning is raised',
-    '85',
-  )
-  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
-  .option('-o, --output <path>', 'Save output to file')
-  .option('-v, --verbose', 'Verbose mode')
-  .action(
-    async (options: {
-      dataDir: string;
-      sampleInterval: string;
-      samples: string;
-      warnThreshold: string;
-      json?: boolean;
-      output?: string;
-      verbose?: boolean;
-    }) => {
-      if (options.verbose) logger.setLevel('debug');
-      if (options.json) logger.setJsonMode(true);
-
-      const sampleInterval = Number.parseInt(options.sampleInterval, 10);
-      const samples = Number.parseInt(options.samples, 10);
-      const warnThreshold = Number.parseFloat(options.warnThreshold);
-
-      if (!Number.isFinite(sampleInterval) || sampleInterval < 0) {
-        const message = '--sample-interval must be a non-negative integer (milliseconds)';
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-      if (!Number.isInteger(samples) || samples < 1) {
-        const message = '--samples must be a positive integer';
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-      if (!Number.isFinite(warnThreshold) || warnThreshold < 0 || warnThreshold > 100) {
-        const message = '--warn-threshold must be a number between 0 and 100';
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-
-      const spinner = makeSpinner(
-        `Inspecting storage for ${options.dataDir}...`,
-        !!options.json,
-      ).start();
-
-      let report;
-      try {
-        report = await inspectCoreStorage({
-          dataDir: options.dataDir,
-          sampleIntervalMs: sampleInterval,
-          samples,
-          warnThresholdPercent: warnThreshold,
-        });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        spinner.fail(message);
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-
-      if (report.capacity.status === 'unavailable') {
-        spinner.fail('Storage inspection failed — filesystem capacity unavailable.');
-      } else if (report.warnings.length > 0) {
-        spinner.succeed('Storage inspection complete — potential storage pressure detected.');
-      } else {
-        spinner.succeed('Storage inspection complete.');
-      }
-
-      writeResult(report, options, formatCoreStorageReport(report));
-      if (report.capacity.status === 'unavailable') process.exitCode = 1;
-    },
-  );
-
-// ---------------------------------------------------------------------------
-// ISSUE-222: Stellar Core Backup Integrity and Recovery Readiness Audit
-// ---------------------------------------------------------------------------
-program
-  .command('backup-integrity-audit <manifests...>')
-  .description(
-    'Audit locally supplied Stellar Core backup manifests for integrity and recovery readiness (read-only)',
+    'Inspect locally exported Stellar Core Prometheus metrics snapshots and analyze trends',
   )
   .option(
-    '--rpo <duration>',
-    'Recovery point objective for backup age (e.g. 24h, 7d, 3600s)',
+    '--threshold <metric=value>',
+    'Flag a metric when its observed value meets or exceeds the given threshold (repeatable)',
+    (value: string, previous: string[] = []) => [...previous, value],
+    [] as string[],
   )
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
   .option('-v, --verbose', 'Verbose mode')
   .action(
     async (
-      manifests: string[],
-      options: { rpo?: string; json?: boolean; output?: string; verbose?: boolean },
+      files: string[],
+      options: { threshold: string[]; json?: boolean; output?: string; verbose?: boolean },
     ) => {
       if (options.verbose) logger.setLevel('debug');
       if (options.json) logger.setJsonMode(true);
 
-      if (!manifests || manifests.length === 0) {
-        const message = 'Provide at least one backup manifest path.';
+      if (!files || files.length === 0) {
+        const message = 'Provide at least one Prometheus metrics snapshot file.';
         if (options.json) outputJsonError(message);
         logger.error(message);
         process.exit(1);
       }
 
+      const thresholds: Record<string, number> = {};
+      for (const entry of options.threshold ?? []) {
+        const separator = entry.indexOf('=');
+        if (separator <= 0) {
+          const message = `Invalid --threshold value "${entry}". Expected metric=value.`;
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+        }
+        const metric = entry.slice(0, separator).trim();
+        const rawValue = entry.slice(separator + 1).trim();
+        const numeric = Number(rawValue);
+        if (!metric || !Number.isFinite(numeric)) {
+          const message = `Invalid --threshold value "${entry}". Expected metric=value with a finite number.`;
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+        }
+        thresholds[metric] = numeric;
+      }
+
       const spinner = makeSpinner(
-        `Auditing ${manifests.length} backup manifest${manifests.length > 1 ? 's' : ''}...`,
+        `Inspecting ${files.length} metrics snapshot${files.length === 1 ? '' : 's'}...`,
         !!options.json,
       ).start();
 
-      let report;
       try {
-        report = await auditBackupIntegrity({
-          manifestPaths: manifests,
-          rpo: options.rpo,
-        });
+        const report = await inspectCoreMetrics({ files, thresholds });
+        spinner.succeed('Metrics inspection complete.');
+        writeResult(report, options, formatCoreMetricsReport(report));
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         spinner.fail(message);
@@ -3765,146 +3694,43 @@ program
         logger.error(message);
         process.exit(1);
       }
-
-      if (report.overallStatus === 'fail') {
-        spinner.fail('Backup integrity audit complete — integrity failures detected.');
-      } else if (report.overallStatus === 'warn') {
-        spinner.succeed('Backup integrity audit complete — warnings detected.');
-      } else {
-        spinner.succeed('Backup integrity audit complete.');
-      }
-
-      writeResult(report, options, formatBackupIntegrityReport(report));
-      if (report.overallStatus === 'fail') process.exitCode = 1;
     },
   );
 
 // ---------------------------------------------------------------------------
-// ISSUE-223: Stellar Core Backup Retention and Lifecycle Policy Audit
+// ISSUE-214: Stellar Core Metrics Export Validation and Schema Consistency Audit
 // ---------------------------------------------------------------------------
 program
-  .command('backup-retention-audit <inventories...>')
-  .description(
-    'Audit locally supplied Stellar Core backup inventories against retention policies (read-only)',
-  )
-  .option(
-    '--policy <json>',
-    'Retention policy JSON: {"category":{"retention":"30d","minCount":2,"warnBefore":"7d"}}',
-  )
-  .option('--policy-file <path>', 'Path to a JSON file containing the retention policy')
+  .command('core-metrics-validate <files...>')
+  .description('Validate locally exported Stellar Core Prometheus metrics for structural consistency')
   .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
   .option('-o, --output <path>', 'Save output to file')
   .option('-v, --verbose', 'Verbose mode')
   .action(
     async (
-      inventories: string[],
-      options: {
-        policy?: string;
-        policyFile?: string;
-        json?: boolean;
-        output?: string;
-        verbose?: boolean;
-      },
-    ) => {
-      if (options.verbose) logger.setLevel('debug');
-      if (options.json) logger.setJsonMode(true);
-
-      if (!inventories || inventories.length === 0) {
-        const message = 'Provide at least one backup inventory path.';
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-
-      let policy: unknown;
-      if (options.policyFile) {
-        try {
-          policy = JSON.parse(fs.readFileSync(options.policyFile, 'utf8'));
-        } catch (err: unknown) {
-          const message = `Failed to read --policy-file: ${
-            err instanceof Error ? err.message : String(err)
-          }`;
-          if (options.json) outputJsonError(message);
-          logger.error(message);
-          process.exit(1);
-        }
-      } else if (options.policy) {
-        try {
-          policy = JSON.parse(options.policy);
-        } catch {
-          const message = '--policy value is not valid JSON.';
-          if (options.json) outputJsonError(message);
-          logger.error(message);
-          process.exit(1);
-        }
-      }
-
-      const spinner = makeSpinner(
-        `Auditing ${inventories.length} backup inventor${inventories.length > 1 ? 'ies' : 'y'}...`,
-        !!options.json,
-      ).start();
-
-      let report;
-      try {
-        report = await auditBackupRetention({
-          inventoryPaths: inventories,
-          policy,
-        });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        spinner.fail(message);
-        if (options.json) outputJsonError(message);
-        logger.error(message);
-        process.exit(1);
-      }
-
-      if (report.overallStatus === 'fail') {
-        spinner.fail('Backup retention audit complete — policy violations detected.');
-      } else if (report.overallStatus === 'warn') {
-        spinner.succeed('Backup retention audit complete — warnings detected.');
-      } else {
-        spinner.succeed('Backup retention audit complete.');
-      }
-
-      writeResult(report, options, formatBackupRetentionReport(report));
-      if (report.overallStatus === 'fail') process.exitCode = 1;
-    },
-  );
-
-// ---------------------------------------------------------------------------
-// ISSUE-224: Soroban RPC JSON-RPC Protocol Compliance Audit
-// ---------------------------------------------------------------------------
-program
-  .command('jsonrpc-compliance-audit <fixtures...>')
-  .description(
-    'Validate locally supplied Soroban RPC request-response fixtures against JSON-RPC 2.0 (offline)',
-  )
-  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
-  .option('-o, --output <path>', 'Save output to file')
-  .option('-v, --verbose', 'Verbose mode')
-  .action(
-    async (
-      fixtures: string[],
+      files: string[],
       options: { json?: boolean; output?: string; verbose?: boolean },
     ) => {
       if (options.verbose) logger.setLevel('debug');
       if (options.json) logger.setJsonMode(true);
 
-      if (!fixtures || fixtures.length === 0) {
-        const message = 'Provide at least one JSON-RPC fixture path.';
+      if (!files || files.length === 0) {
+        const message = 'Provide at least one Prometheus metrics export file to validate.';
         if (options.json) outputJsonError(message);
         logger.error(message);
         process.exit(1);
       }
 
       const spinner = makeSpinner(
-        `Validating ${fixtures.length} JSON-RPC fixture${fixtures.length > 1 ? 's' : ''}...`,
+        `Validating ${files.length} metrics export${files.length === 1 ? '' : 's'}...`,
         !!options.json,
       ).start();
 
-      let report;
       try {
-        report = await auditJsonRpcCompliance({ fixturePaths: fixtures });
+        const report = await validateCoreMetricsExport({ files });
+        spinner.succeed('Metrics validation complete.');
+        writeResult(report, options, formatCoreMetricsValidationReport(report));
+        if (report.summary.errors > 0) process.exitCode = 1;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         spinner.fail(message);
@@ -3912,17 +3738,102 @@ program
         logger.error(message);
         process.exit(1);
       }
+    },
+  );
 
-      if (report.overallStatus === 'fail') {
-        spinner.fail('JSON-RPC compliance audit complete — protocol violations detected.');
-      } else if (report.overallStatus === 'warn') {
-        spinner.succeed('JSON-RPC compliance audit complete — warnings detected.');
-      } else {
-        spinner.succeed('JSON-RPC compliance audit complete.');
+// ---------------------------------------------------------------------------
+// ISSUE-215: Stellar Core SCP Consensus State Inspection and Diagnostics
+// ---------------------------------------------------------------------------
+program
+  .command('core-scp-state <files...>')
+  .description('Inspect locally supplied Stellar Core SCP consensus state diagnostics')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      files: string[],
+      options: { json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!files || files.length === 0) {
+        const message = 'Provide at least one SCP diagnostic file.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
       }
 
-      writeResult(report, options, formatJsonRpcComplianceReport(report));
-      if (report.overallStatus === 'fail') process.exitCode = 1;
+      const spinner = makeSpinner(
+        `Inspecting ${files.length} SCP diagnostic snapshot${files.length === 1 ? '' : 's'}...`,
+        !!options.json,
+      ).start();
+
+      try {
+        const report = await inspectScpState({ files });
+        spinner.succeed('SCP state inspection complete.');
+        writeResult(report, options, formatScpStateReport(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-216: Stellar Core Administrative Endpoint Exposure and Security Audit
+// ---------------------------------------------------------------------------
+program
+  .command('core-admin-endpoints <config>')
+  .description(
+    'Audit Stellar Core configuration for potentially unsafe administrative endpoint exposure',
+  )
+  .option(
+    '--listening <path>',
+    'Optional locally supplied listening-interface diagnostic data for comparison',
+  )
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      config: string,
+      options: { listening?: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!config) {
+        const message = 'Provide a Stellar Core configuration file to audit.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        'Auditing Stellar Core administrative endpoint exposure...',
+        !!options.json,
+      ).start();
+
+      try {
+        const report = await auditAdminEndpoints({
+          configFile: config,
+          listeningFile: options.listening,
+        });
+        spinner.succeed('Administrative endpoint audit complete.');
+        writeResult(report, options, formatAdminEndpointAuditReport(report));
+        if (report.summary.highSeverity > 0) process.exitCode = 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
     },
   );
 

@@ -1329,219 +1329,200 @@ npm run dev -- analyze-tx <hash> --json --output analysis.json
 }
 ```
 
-### Stellar Core Storage Diagnostics
+### Stellar Core Prometheus Metrics Inspection
 
-Inspect the filesystem that contains a Stellar Core data directory and report capacity, utilization, mount information, and available disk I/O statistics:
+Inspect locally exported Prometheus metrics snapshots from Stellar Core without connecting to a running node:
 
 ```bash
-npm run dev -- core-storage --data-dir /var/lib/stellar
-npm run dev -- core-storage --data-dir /var/lib/stellar --json
+npm run dev -- core-metrics ./fixtures/metrics-1.prom
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --output metrics-report.json
 ```
 
-Options:
+**Supported input formats:** Prometheus text exposition format (`# HELP`, `# TYPE`, and sample lines). Counters, gauges, histograms (`_bucket`, `_sum`, `_count`), and summaries (quantiles, `_sum`, `_count`) are parsed according to their declared type. Metric names, labels, and timestamps are preserved where present.
 
-| Option | Description |
-|---|---|
-| `--data-dir <path>` | Stellar Core data directory to inspect (required) |
-| `--samples <n>` | Number of repeated I/O observations (default: 2) |
-| `--interval-ms <ms>` | Delay between I/O samples in milliseconds (default: 1000) |
-| `--warn-percent <n>` | Filesystem utilization warning threshold (default: 80) |
-| `--critical-percent <n>` | Filesystem utilization critical threshold (default: 90) |
+**Comparison and thresholds:**
 
-The report distinguishes **filesystem capacity** (total, used, available, utilization) from **Stellar Core storage consumption** — the tool does not measure database performance and does not claim that filesystem-wide I/O belongs to Stellar Core. Disk read/write activity is reported as filesystem-wide or system-wide observations, and is marked unavailable when the operating system does not expose the counters or permissions are insufficient.
+```bash
+# Compare two snapshots
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --compare ./fixtures/metrics-2.prom
 
-The inspection is strictly read-only: it never writes to, deletes from, or performs maintenance on the inspected directory. Inaccessible directories and unsupported OS metrics are reported clearly rather than treated as failures.
+# Flag metric values above a threshold (repeatable)
+npm run dev -- core-metrics ./fixtures/metrics-1.prom \
+  --threshold 'stellar_core_ledger_close_time_seconds>5' \
+  --threshold 'stellar_core_peer_count<3'
+```
+
+- Counter changes are calculated only when both observations are comparable; counter resets are reported as resets, not as ordinary decreases.
+- Missing, newly appearing, and changed series are listed separately.
+- Missing metrics are **not** treated as failures — availability varies by Stellar Core version and deployment configuration.
+- Threshold warnings are heuristic and clearly labeled as such, distinct from observed values and calculated changes.
+
+**JSON output structure:**
 
 ```json
 {
   "ok": true,
   "data": {
-    "dataDir": "/var/lib/stellar",
-    "mount": { "mountPoint": "/", "filesystem": "ext4", "supported": true },
-    "capacity": {
-      "totalBytes": 107374182400,
-      "usedBytes": 42949672960,
-      "availableBytes": 64424509440,
-      "usedPercent": 40,
-      "availablePercent": 60
+    "source": "./fixtures/metrics-1.prom",
+    "summary": {
+      "metricCount": 12,
+      "seriesCount": 34,
+      "byType": { "counter": 5, "gauge": 4, "histogram": 2, "summary": 1 }
     },
-    "thresholds": { "warnPercent": 80, "criticalPercent": 90, "status": "ok" },
-    "io": {
-      "supported": true,
-      "scope": "filesystem-wide",
-      "samples": 2,
-      "readBytesPerSecond": 1048576,
-      "writeBytesPerSecond": 524288,
-      "note": "I/O counters are filesystem-wide observations, not Stellar Core process metrics."
-    },
-    "warnings": []
-  }
-}
-```
-
-### Stellar Core Backup Integrity Audit
-
-Audit locally supplied Stellar Core backup artifacts against a manifest before they are needed for recovery:
-
-```bash
-npm run dev -- core-backup-audit --manifest ./backups/manifest.json
-npm run dev -- core-backup-audit --manifest ./backups/manifest.json --rpo-hours 24 --json
-```
-
-Options:
-
-| Option | Description |
-|---|---|
-| `--manifest <path>` | Backup manifest to audit (repeatable for multi-manifest comparison) |
-| `--rpo-hours <n>` | Recovery point objective in hours; backups older than this are flagged |
-| `--json` | Emit structured JSON |
-
-**Manifest schema** (documented, versioned):
-
-```json
-{
-  "manifestVersion": 1,
-  "createdAt": "2024-01-15T12:00:00Z",
-  "stellarCoreVersion": "20.1.0",
-  "artifacts": [
-    { "path": "db/bucket.sqlite", "sizeBytes": 1048576, "sha256": "abc123..." }
-  ]
-}
-```
-
-The audit verifies required files exist, computes SHA-256 checksums for available artifacts, compares them against manifest references, and reports missing, unexpected, incomplete, and corrupted artifacts. It also reports backup age against the configured RPO and inspects Stellar Core version metadata for potential compatibility concerns. Missing manifest metadata is reported as inconclusive rather than a confirmed integrity failure.
-
-> **Limitation:** checksum validation confirms artifact integrity only. It does **not** prove that a backup can be successfully restored. A restoration test is required to confirm recovery readiness.
-
-The audit never restores, deletes, overwrites, or modifies backup artifacts.
-
-```json
-{
-  "ok": true,
-  "data": {
-    "manifests": [{ "path": "./backups/manifest.json", "manifestVersion": 1 }],
-    "artifacts": {
-      "verified": 1,
-      "missing": 0,
-      "unexpected": 0,
-      "corrupted": 0
-    },
-    "age": { "createdAt": "2024-01-15T12:00:00Z", "ageHours": 6, "rpoHours": 24, "withinRpo": true },
-    "compatibility": { "stellarCoreVersion": "20.1.0", "warnings": [] },
-    "readiness": "integrity-verified",
-    "limitations": ["Checksum validation does not prove successful restoration."]
-  }
-}
-```
-
-### Stellar Core Backup Retention Audit
-
-Evaluate backup inventories against configurable retention policies:
-
-```bash
-npm run dev -- core-backup-retention --inventory ./backups/inventory.json --policy ./backups/policy.json
-npm run dev -- core-backup-retention --inventory ./backups/inventory.json --policy ./backups/policy.json --json
-```
-
-Options:
-
-| Option | Description |
-|---|---|
-| `--inventory <path>` | Backup inventory manifest (repeatable for multiple locations) |
-| `--policy <path>` | Retention policy definition |
-| `--json` | Emit structured JSON |
-
-**Inventory manifest format:**
-
-```json
-{
-  "inventoryVersion": 1,
-  "location": "s3://backups/stellar",
-  "backups": [
-    { "id": "b1", "category": "daily", "createdAt": "2024-01-15T00:00:00Z", "sizeBytes": 1048576, "sha256": "abc123..." }
-  ]
-}
-```
-
-**Policy format** — each backup category can have independent retention requirements:
-
-```json
-{
-  "policyVersion": 1,
-  "categories": {
-    "daily": { "retentionDays": 7, "minimumCount": 3, "warnBeforeDays": 1 }
-  }
-}
-```
-
-The audit identifies expired backups, retention gaps (missing expected coverage), duplicate references (by matching metadata or checksums), and backups approaching expiration. Estimated storage occupied by expired and redundant artifacts is calculated from available sizes. Findings are split into **policy violations** (confirmed breaches) and **optimization recommendations** (optional storage savings). Missing timestamps or incomplete metadata are reported as inconclusive, not as violations.
-
-The audit never deletes, moves, or modifies backup artifacts.
-
-```json
-{
-  "ok": true,
-  "data": {
-    "locations": [{ "location": "s3://backups/stellar", "backupCount": 1 }],
-    "categories": {
-      "daily": { "retentionDays": 7, "minimumCount": 3, "expired": 0, "approachingExpiration": 0, "gaps": 0 }
-    },
-    "duplicates": [],
-    "storage": { "expiredBytes": 0, "redundantBytes": 0 },
-    "violations": [],
-    "recommendations": []
-  }
-}
-```
-
-### Soroban RPC JSON-RPC Compliance Audit
-
-Validate captured Soroban RPC request-response pairs against JSON-RPC 2.0 protocol requirements, entirely offline:
-
-```bash
-npm run dev -- soroban-rpc-compliance --fixture ./fixtures/pair.json
-npm run dev -- soroban-rpc-compliance --fixture ./fixtures/pair.json --json
-```
-
-Options:
-
-| Option | Description |
-|---|---|
-| `--fixture <path>` | Local JSON fixture containing a request-response pair (repeatable) |
-| `--json` | Emit structured JSON |
-
-**Fixture format:**
-
-```json
-{
-  "request": { "jsonrpc": "2.0", "id": 1, "method": "getHealth", "params": {} },
-  "response": { "jsonrpc": "2.0", "id": 1, "result": { "status": "healthy" } }
-}
-```
-
-**Supported validation rules:**
-
-- `jsonrpc` field must be exactly `"2.0"` on both request and response
-- request must contain `method`; response must contain exactly one of `result` or `error`
-- request and response `id` values must correlate (missing, duplicated, or mismatched IDs are flagged)
-- error objects must include a numeric `code` and string `message`
-- method-aware response validation is applied only when a schema exists for the method; unknown methods are not reported as protocol violations
-
-Findings are classified as **protocol violations**, **method-specific validation failures**, **warnings**, or **inconclusive checks**, each with an explanation and remediation guidance. No live endpoint is contacted.
-
-```json
-{
-  "ok": true,
-  "data": {
-    "fixtures": [
+    "metrics": [
       {
-        "path": "./fixtures/pair.json",
-        "method": "getHealth",
-        "findings": [],
-        "status": "valid"
+        "name": "stellar_core_ledger_close_time_seconds",
+        "type": "gauge",
+        "help": "Ledger close time in seconds",
+        "series": [
+          { "labels": { "ledger": "50000000" }, "value": 5.1, "timestamp": null }
+        ]
       }
     ],
-    "summary": { "valid": 1, "violations": 0, "warnings": 0, "inconclusive": 0 }
+    "comparison": {
+      "changed": [],
+      "missing": [],
+      "new": [],
+      "counterResets": []
+    },
+    "warnings": [],
+    "diagnostics": []
+  }
+}
+```
+
+**Limitations:** Timestamps are only available when present in the export. Counter changes require comparable observations; resets and gaps are reported explicitly. Malformed samples, duplicate series, and unsupported representations are reported as diagnostics rather than aborting the inspection.
+
+### Stellar Core Metrics Export Validation
+
+Validate the structural consistency of a local Prometheus metrics export:
+
+```bash
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --output validation.json
+```
+
+The validator reuses the metrics parser and checks:
+
+- metric name and exposition syntax
+- consistency between `# TYPE` declarations and sample types
+- duplicate metric declarations and conflicting type definitions
+- label formatting and duplicate label names
+- duplicate time series within the same export
+- histogram bucket ordering and cumulative bucket consistency
+- summary quantile representations
+- invalid numeric samples (including non-finite values where prohibited)
+
+Findings carry a severity (`error`, `warning`, `info`) and a source location (line/column) where available. Missing optional metadata (such as `# HELP`) is reported as informational, not as a format violation. Validation is read-only and never modifies the supplied files.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/metrics-1.prom",
+    "valid": false,
+    "counts": { "error": 1, "warning": 2, "info": 1 },
+    "findings": [
+      {
+        "severity": "error",
+        "code": "duplicate-series",
+        "message": "Duplicate time series for stellar_core_peer_count{type=\"inbound\"}",
+        "location": { "line": 42, "column": 1 }
+      }
+    ]
+  }
+}
+```
+
+### Stellar Core SCP Consensus State Inspection
+
+Inspect locally supplied Stellar Core SCP status or diagnostic output:
+
+```bash
+npm run dev -- scp-state ./fixtures/scp-status.json
+npm run dev -- scp-state ./fixtures/scp-status.json --compare ./fixtures/scp-status-2.json
+npm run dev -- scp-state ./fixtures/scp-status.json --json
+```
+
+**Supported input formats:** documented SCP status/diagnostic representations supplied as local files. The command extracts ledger slot identifiers, nomination and ballot phase information, and commit/prepared/externalized state where exposed by the input, and summarizes consensus state per ledger slot.
+
+- Inconsistent or malformed slot references are reported with source references.
+- Potentially stalled states are reported only when timestamps or repeated observations support the finding.
+- Missing or unavailable consensus fields are reported as unavailable, not as confirmed failures.
+- The report clearly distinguishes **local observations**, **inferred conditions**, and **conclusions that require additional network data**. A single local snapshot never establishes network-wide consensus health.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/scp-status.json",
+    "slots": [
+      {
+        "slot": 50000000,
+        "nomination": { "phase": "nominating", "values": [] },
+        "ballot": { "counter": 2, "value": "..." },
+        "state": "externalized",
+        "observedAt": "2024-01-15T12:00:00.000Z"
+      }
+    ],
+    "comparison": { "changes": [] },
+    "observations": [],
+    "inferences": [],
+    "requiresNetworkData": [],
+    "diagnostics": []
+  }
+}
+```
+
+### Stellar Core Administrative Endpoint Security Audit
+
+Audit administrative endpoint exposure from local Stellar Core configuration:
+
+```bash
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --listening ./fixtures/listening.json
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --json
+```
+
+The audit reuses the existing Stellar Core configuration parsing utilities and identifies documented HTTP administrative and operational interfaces, their configured binding addresses and ports, and available access-control settings.
+
+- Binding addresses are classified as loopback, private, wildcard, or public.
+- Administrative interfaces bound to potentially public addresses are flagged with severity levels and remediation guidance.
+- Unexpected or conflicting port assignments are reported where configuration information is sufficient.
+- Missing or weak access-control settings are flagged only where the endpoint's documented security model supports them.
+- Missing information is reported as **inconclusive**, not as a confirmed vulnerability.
+- The report distinguishes **configured exposure** from **independently verified network reachability**. A publicly bound endpoint is not assumed to be reachable through the surrounding network.
+- Optional `--listening` comparison uses an explicitly supplied listening-interface diagnostic; the audit performs no administrative requests and never modifies configuration.
+- Sensitive configuration values (such as secrets and keys) are redacted from all output formats.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/stellar-core.cfg",
+    "endpoints": [
+      {
+        "name": "HTTP_PORT",
+        "address": "0.0.0.0",
+        "port": 11626,
+        "classification": "wildcard",
+        "accessControl": "none",
+        "severity": "high",
+        "findings": ["Administrative interface bound to a wildcard address"],
+        "remediation": ["Bind to 127.0.0.1 or restrict access with a firewall"]
+      }
+    ],
+    "listeningComparison": null,
+    "inconclusive": [],
+    "notes": ["Configured exposure is not verified external reachability."]
   }
 }
 ```
