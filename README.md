@@ -1329,232 +1329,200 @@ npm run dev -- analyze-tx <hash> --json --output analysis.json
 }
 ```
 
-### Stellar Core Configuration Drift Detection
+### Stellar Core Prometheus Metrics Inspection
 
-Compare one or more locally supplied Stellar Core configuration files against a designated baseline and report added, removed, and modified settings:
-
-```bash
-npm run dev -- core-config-drift --baseline ./baseline.cfg --current ./current.cfg
-```
-
-Compare multiple snapshots against the same baseline:
+Inspect locally exported Prometheus metrics snapshots from Stellar Core without connecting to a running node:
 
 ```bash
-npm run dev -- core-config-drift \
-  --baseline ./baseline.cfg \
-  --current ./node-a.cfg \
-  --current ./node-b.cfg
+npm run dev -- core-metrics ./fixtures/metrics-1.prom
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --output metrics-report.json
 ```
 
-Options:
+**Supported input formats:** Prometheus text exposition format (`# HELP`, `# TYPE`, and sample lines). Counters, gauges, histograms (`_bucket`, `_sum`, `_count`), and summaries (quantiles, `_sum`, `_count`) are parsed according to their declared type. Metric names, labels, and timestamps are preserved where present.
 
-| Option | Description |
-|---|---|
-| `--baseline <path>` | Configuration file treated as the approved baseline (required) |
-| `--current <path>` | Configuration snapshot to compare; repeat for multiple snapshots (required) |
-| `--exclude <path>` | Configuration path (e.g. `HTTP_PORT`) to ignore; repeatable |
-| `--approve <path>` | Configuration path whose differences are treated as approved changes; repeatable |
-| `--severity <level>` | Severity assigned to unexpected drift findings (`info`, `warning`, `error`) |
-| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
-| `--output <path>` | Write the report to a file |
-
-Findings are categorized by change type (`added`, `removed`, `modified`) and preserve the full section/key path (e.g. `[HTTP_PORT]` or `[QUORUM_SET]`). Sensitive settings (keys matching secret, password, seed, or key material patterns) are reported as changed without exposing their values — the report shows `<redacted>` in place of the actual content. Exclusion and approval rules prevent intentionally variable or approved differences from appearing as unexpected drift.
-
-The report distinguishes observed differences from security or operational conclusions: a difference is reported as an observation, not automatically as a security issue. The command only reads the supplied files and never modifies them.
+**Comparison and thresholds:**
 
 ```bash
-npm run dev -- core-config-drift --baseline ./baseline.cfg --current ./current.cfg --json
+# Compare two snapshots
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --compare ./fixtures/metrics-2.prom
+
+# Flag metric values above a threshold (repeatable)
+npm run dev -- core-metrics ./fixtures/metrics-1.prom \
+  --threshold 'stellar_core_ledger_close_time_seconds>5' \
+  --threshold 'stellar_core_peer_count<3'
 ```
+
+- Counter changes are calculated only when both observations are comparable; counter resets are reported as resets, not as ordinary decreases.
+- Missing, newly appearing, and changed series are listed separately.
+- Missing metrics are **not** treated as failures — availability varies by Stellar Core version and deployment configuration.
+- Threshold warnings are heuristic and clearly labeled as such, distinct from observed values and calculated changes.
+
+**JSON output structure:**
 
 ```json
 {
   "ok": true,
   "data": {
-    "baseline": "./baseline.cfg",
-    "snapshots": [
+    "source": "./fixtures/metrics-1.prom",
+    "summary": {
+      "metricCount": 12,
+      "seriesCount": 34,
+      "byType": { "counter": 5, "gauge": 4, "histogram": 2, "summary": 1 }
+    },
+    "metrics": [
       {
-        "path": "./current.cfg",
-        "summary": { "added": 1, "removed": 0, "modified": 2, "approved": 1, "excluded": 0 },
-        "changes": [
-          {
-            "changeType": "modified",
-            "path": "HTTP_PORT",
-            "section": null,
-            "baselineValue": "11625",
-            "currentValue": "11626",
-            "sensitive": false,
-            "approved": false,
-            "severity": "warning"
-          },
-          {
-            "changeType": "modified",
-            "path": "NODE_SEED",
-            "section": null,
-            "baselineValue": "<redacted>",
-            "currentValue": "<redacted>",
-            "sensitive": true,
-            "approved": false,
-            "severity": "warning"
-          }
+        "name": "stellar_core_ledger_close_time_seconds",
+        "type": "gauge",
+        "help": "Ledger close time in seconds",
+        "series": [
+          { "labels": { "ledger": "50000000" }, "value": 5.1, "timestamp": null }
         ]
+      }
+    ],
+    "comparison": {
+      "changed": [],
+      "missing": [],
+      "new": [],
+      "counterResets": []
+    },
+    "warnings": [],
+    "diagnostics": []
+  }
+}
+```
+
+**Limitations:** Timestamps are only available when present in the export. Counter changes require comparable observations; resets and gaps are reported explicitly. Malformed samples, duplicate series, and unsupported representations are reported as diagnostics rather than aborting the inspection.
+
+### Stellar Core Metrics Export Validation
+
+Validate the structural consistency of a local Prometheus metrics export:
+
+```bash
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --output validation.json
+```
+
+The validator reuses the metrics parser and checks:
+
+- metric name and exposition syntax
+- consistency between `# TYPE` declarations and sample types
+- duplicate metric declarations and conflicting type definitions
+- label formatting and duplicate label names
+- duplicate time series within the same export
+- histogram bucket ordering and cumulative bucket consistency
+- summary quantile representations
+- invalid numeric samples (including non-finite values where prohibited)
+
+Findings carry a severity (`error`, `warning`, `info`) and a source location (line/column) where available. Missing optional metadata (such as `# HELP`) is reported as informational, not as a format violation. Validation is read-only and never modifies the supplied files.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/metrics-1.prom",
+    "valid": false,
+    "counts": { "error": 1, "warning": 2, "info": 1 },
+    "findings": [
+      {
+        "severity": "error",
+        "code": "duplicate-series",
+        "message": "Duplicate time series for stellar_core_peer_count{type=\"inbound\"}",
+        "location": { "line": 42, "column": 1 }
       }
     ]
   }
 }
 ```
 
-Malformed or unsupported configuration files produce actionable errors with the offending file path and line where available.
+### Stellar Core SCP Consensus State Inspection
 
-### Stellar Core Binary Integrity Audit
-
-Inspect a locally supplied Stellar Core executable without executing it:
+Inspect locally supplied Stellar Core SCP status or diagnostic output:
 
 ```bash
-npm run dev -- core-binary-audit ./stellar-core
+npm run dev -- scp-state ./fixtures/scp-status.json
+npm run dev -- scp-state ./fixtures/scp-status.json --compare ./fixtures/scp-status-2.json
+npm run dev -- scp-state ./fixtures/scp-status.json --json
 ```
 
-Options:
+**Supported input formats:** documented SCP status/diagnostic representations supplied as local files. The command extracts ledger slot identifiers, nomination and ballot phase information, and commit/prepared/externalized state where exposed by the input, and summarizes consensus state per ledger slot.
 
-| Option | Description |
-|---|---|
-| `--binary <path>` | Path to the Stellar Core executable to inspect |
-| `--checksums <path>` | Local trusted release checksum manifest (e.g. `SHA256SUMS`) |
-| `--expected-version <version>` | Expected release version to compare against reported metadata |
-| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
-| `--output <path>` | Write the report to a file |
+- Inconsistent or malformed slot references are reported with source references.
+- Potentially stalled states are reported only when timestamps or repeated observations support the finding.
+- Missing or unavailable consensus fields are reported as unavailable, not as confirmed failures.
+- The report clearly distinguishes **local observations**, **inferred conditions**, and **conclusions that require additional network data**. A single local snapshot never establishes network-wide consensus health.
 
-The audit calculates a SHA-256 checksum, identifies the executable format and architecture where supported (ELF on Linux, Mach-O on macOS, PE on Windows), and extracts available version and embedded build metadata. Unsupported or unrecognized formats produce actionable errors.
-
-When a trusted checksum manifest is supplied, the calculated checksum is compared against the matching entry. A matching checksum establishes **integrity relative to the supplied reference only** — it does not prove publisher authenticity, and the report never claims a binary is officially published or safe based solely on a checksum match. Missing metadata is reported separately from confirmed checksum mismatches.
-
-The command reads the binary only; it never executes, modifies, or replaces the supplied file.
-
-```bash
-npm run dev -- core-binary-audit ./stellar-core --checksums ./SHA256SUMS --json
-```
+**JSON output structure:**
 
 ```json
 {
   "ok": true,
   "data": {
-    "path": "./stellar-core",
-    "format": "elf",
-    "architecture": "x86_64",
-    "sha256": "9f2c...",
-    "version": "21.0.0",
-    "buildMetadata": { "commit": "abc123", "buildTimestamp": "2024-01-15T12:00:00Z" },
-    "checksumVerification": {
-      "manifest": "./SHA256SUMS",
-      "expected": "9f2c...",
-      "match": true,
-      "publisherAuthenticityVerified": false
-    },
-    "findings": []
-  }
-}
-```
-
-### Stellar Core Host Clock Diagnostics
-
-Inspect the host's system time and time synchronization status without connecting to a Stellar network:
-
-```bash
-npm run dev -- core-clock
-```
-
-Options:
-
-| Option | Description |
-|---|---|
-| `--max-offset <ms>` | Warning threshold for estimated clock offset in milliseconds |
-| `--observe <label=timestamp>` | Node timestamp observation to compare; repeatable |
-| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
-| `--output <path>` | Write the report to a file |
-
-The command reports the current system time, synchronization status, configured time source, and estimated clock offset where the operating system exposes them (e.g. `timedatectl` on Linux, `sntp`/`systemsetup` on macOS). Unavailable, disabled, or unhealthy synchronization services are reported as such. Unsupported platforms and insufficient permissions produce clear diagnostic messages rather than failures.
-
-Multiple node observations can be compared to identify apparent clock differences:
-
-```bash
-npm run dev -- core-clock \
-  --observe node-a=2024-01-15T12:00:00Z \
-  --observe node-b=2024-01-15T12:00:02Z
-```
-
-The report distinguishes operating system synchronization status from independently verified time accuracy: a synchronized clock is not assumed to be accurate, and a timestamp difference between nodes does not prove a consensus failure. Measured offsets are distinguished from estimates and unavailable measurements.
-
-The command performs read-only inspection and never changes system time, time zones, or synchronization settings.
-
-```json
-{
-  "ok": true,
-  "data": {
-    "systemTime": "2024-01-15T12:00:00.000Z",
-    "synchronized": true,
-    "timeSource": "ntp:pool.ntp.org",
-    "offsetMs": 12,
-    "offsetSource": "measured",
-    "thresholdMs": 500,
-    "thresholdExceeded": false,
-    "observations": [
-      { "label": "node-a", "timestamp": "2024-01-15T12:00:00.000Z" },
-      { "label": "node-b", "timestamp": "2024-01-15T12:00:02.000Z" }
-    ],
-    "apparentDifferences": [
-      { "from": "node-a", "to": "node-b", "differenceMs": 2000 }
-    ],
-    "warnings": []
-  }
-}
-```
-
-### Stellar Core Data Directory Permission Audit
-
-Inspect the permissions and ownership of a Stellar Core data directory and its relevant subdirectories:
-
-```bash
-npm run dev -- core-data-permissions --dir /var/lib/stellar
-```
-
-Options:
-
-| Option | Description |
-|---|---|
-| `--dir <path>` | Stellar Core data directory to inspect |
-| `--expected-owner <user>` | Expected owner for inspected paths |
-| `--policy <path>` | JSON permission policy describing category-specific requirements |
-| `--redact-paths` | Redact sensitive path information in the report |
-| `--json` | Emit the standard `{ "ok": true, "data": ... }` JSON envelope |
-| `--output <path>` | Write the report to a file |
-
-The audit identifies configuration, database, log, temporary, and runtime directories where present, collects ownership and permission metadata, and detects world-writable and unexpectedly group-writable paths, ownership that differs from the configured expected owner, inaccessible paths, and symbolic links that resolve outside the inspected directory. Inaccessible paths are reported without terminating the audit.
-
-Configurable policies distinguish sensitive files from operational files that legitimately require write access, so legitimate write access is not automatically classified as a security issue. Findings are observations with observed permissions and recommended remediation — not security conclusions.
-
-The audit operates in read-only mode and never changes ownership, permissions, or file contents.
-
-```bash
-npm run dev -- core-data-permissions --dir /var/lib/stellar --expected-owner stellar --json
-```
-
-```json
-{
-  "ok": true,
-  "data": {
-    "directory": "/var/lib/stellar",
-    "expectedOwner": "stellar",
-    "findings": [
+    "source": "./fixtures/scp-status.json",
+    "slots": [
       {
-        "path": "/var/lib/stellar/stellar-core.cfg",
-        "category": "configuration",
-        "observedMode": "0666",
-        "observedOwner": "stellar",
-        "issue": "world-writable",
-        "remediation": "Restrict write access to the Stellar Core service account (chmod 0640)."
+        "slot": 50000000,
+        "nomination": { "phase": "nominating", "values": [] },
+        "ballot": { "counter": 2, "value": "..." },
+        "state": "externalized",
+        "observedAt": "2024-01-15T12:00:00.000Z"
       }
     ],
-    "inaccessiblePaths": [],
-    "symlinkEscapes": []
+    "comparison": { "changes": [] },
+    "observations": [],
+    "inferences": [],
+    "requiresNetworkData": [],
+    "diagnostics": []
+  }
+}
+```
+
+### Stellar Core Administrative Endpoint Security Audit
+
+Audit administrative endpoint exposure from local Stellar Core configuration:
+
+```bash
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --listening ./fixtures/listening.json
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --json
+```
+
+The audit reuses the existing Stellar Core configuration parsing utilities and identifies documented HTTP administrative and operational interfaces, their configured binding addresses and ports, and available access-control settings.
+
+- Binding addresses are classified as loopback, private, wildcard, or public.
+- Administrative interfaces bound to potentially public addresses are flagged with severity levels and remediation guidance.
+- Unexpected or conflicting port assignments are reported where configuration information is sufficient.
+- Missing or weak access-control settings are flagged only where the endpoint's documented security model supports them.
+- Missing information is reported as **inconclusive**, not as a confirmed vulnerability.
+- The report distinguishes **configured exposure** from **independently verified network reachability**. A publicly bound endpoint is not assumed to be reachable through the surrounding network.
+- Optional `--listening` comparison uses an explicitly supplied listening-interface diagnostic; the audit performs no administrative requests and never modifies configuration.
+- Sensitive configuration values (such as secrets and keys) are redacted from all output formats.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/stellar-core.cfg",
+    "endpoints": [
+      {
+        "name": "HTTP_PORT",
+        "address": "0.0.0.0",
+        "port": 11626,
+        "classification": "wildcard",
+        "accessControl": "none",
+        "severity": "high",
+        "findings": ["Administrative interface bound to a wildcard address"],
+        "remediation": ["Bind to 127.0.0.1 or restrict access with a firewall"]
+      }
+    ],
+    "listeningComparison": null,
+    "inconclusive": [],
+    "notes": ["Configured exposure is not verified external reachability."]
   }
 }
 ```
