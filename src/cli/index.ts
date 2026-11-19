@@ -816,6 +816,7 @@ program
   );
 
 registerFreezyyyArchCommands(program);
+registerStellarCoreOpsCommands(program);
 
 program
   .command('account-offers <accountId>')
