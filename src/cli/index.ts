@@ -101,6 +101,14 @@ import { inspectScpState } from '../services/scp-state-inspection';
 import { formatScpStateReport } from '../output/scp-state-report';
 import { auditAdminEndpoints } from '../services/admin-endpoint-audit';
 import { formatAdminEndpointAuditReport } from '../output/admin-endpoint-audit-report';
+import { auditProcessRuntime } from '../services/stellar-core-process-runtime';
+import { formatProcessRuntimeReport } from '../output/stellar-core-process-runtime-report';
+import { inspectCoreLogs, LogLevel as CoreLogLevel } from '../services/stellar-core-log-inspection';
+import { formatCoreLogInspectionReport } from '../output/stellar-core-log-inspection-report';
+import { auditConfigCompatibility } from '../services/stellar-core-config-compat-audit';
+import { formatConfigCompatAuditReport } from '../output/stellar-core-config-compat-audit-report';
+import { auditValidatorIdentity } from '../services/stellar-core-validator-identity-audit';
+import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -3827,6 +3835,235 @@ program
         spinner.succeed('Administrative endpoint audit complete.');
         writeResult(report, options, formatAdminEndpointAuditReport(report));
         if (report.summary.highSeverity > 0) process.exitCode = 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-207: Stellar Core Process Runtime and Resource Usage Diagnostics
+// ---------------------------------------------------------------------------
+program
+  .command('core-process-diagnostics <pid>')
+  .description('Inspect a running Stellar Core process for CPU, memory, uptime, threads, and FD usage')
+  .option('--name <name>', 'Expected executable name (e.g. stellar-core) used to confirm identity')
+  .option('--history <path>', 'Optional prior observation JSON to detect unexpected termination and trends')
+  .option('--cpu-warning <pct>', 'CPU utilization percentage that triggers a warning', '70')
+  .option('--cpu-critical <pct>', 'CPU utilization percentage that triggers a critical finding', '90')
+  .option('--mem-warning <mb>', 'RSS in MiB that triggers a warning', '2048')
+  .option('--mem-critical <mb>', 'RSS in MiB that triggers a critical finding', '4096')
+  .option('--fd-warning <n>', 'Open file descriptor count that triggers a warning', '1024')
+  .option('--fd-critical <n>', 'Open file descriptor count that triggers a critical finding', '4096')
+  .option('--cpu-sample-ms <ms>', 'Two-sample CPU window interval in milliseconds (Linux)', '200')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (pidStr: string, options: Record<string, string> & { json?: boolean; output?: string; verbose?: boolean }) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      const pid = Number.parseInt(pidStr, 10);
+      if (!Number.isInteger(pid) || pid <= 0) {
+        const message = `Invalid pid '${pidStr}'. Provide a positive integer process id.`;
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const toBytes = (mb: string | undefined): number | undefined => {
+        const n = Number(mb);
+        return Number.isFinite(n) ? n * 1024 * 1024 : undefined;
+      };
+
+      const spinner = makeSpinner(`Inspecting process ${pid}...`, !!options.json).start();
+      try {
+        const report = auditProcessRuntime({
+          pid,
+          expectedName: options.name,
+          historyPath: options.history,
+          cpuSampleMs: options.cpuSampleMs ? Number.parseInt(options.cpuSampleMs, 10) : undefined,
+          thresholds: {
+            cpuWarningPercent: options.cpuWarning ? Number(options.cpuWarning) : undefined,
+            cpuCriticalPercent: options.cpuCritical ? Number(options.cpuCritical) : undefined,
+            memoryWarningBytes: toBytes(options.memWarning),
+            memoryCriticalBytes: toBytes(options.memCritical),
+            fdWarning: options.fdWarning ? Number(options.fdWarning) : undefined,
+            fdCritical: options.fdCritical ? Number(options.fdCritical) : undefined,
+          },
+        });
+        spinner.succeed('Process runtime diagnostics complete.');
+        writeResult(report, options, formatProcessRuntimeReport(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-208: Stellar Core Log Inspection and Error Pattern Analysis
+// ---------------------------------------------------------------------------
+program
+  .command('core-log-inspect <files...>')
+  .description('Inspect Stellar Core application logs and identify recurring errors and operational patterns')
+  .option('--level <level>', 'Filter to events at or above this level (trace|debug|info|warning|error|fatal)')
+  .option('--component <name>', 'Case-insensitive component substring filter')
+  .option('--since <time>', 'Include only events at or after this time (ISO 8601 or epoch)')
+  .option('--until <time>', 'Include only events at or before this time (ISO 8601 or epoch)')
+  .option('--search <term>', 'Case-insensitive message substring search')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      files: string[],
+      options: {
+        level?: string;
+        component?: string;
+        since?: string;
+        until?: string;
+        search?: string;
+        json?: boolean;
+        output?: string;
+        verbose?: boolean;
+      },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!files || files.length === 0) {
+        const message = 'Provide at least one Stellar Core log file to inspect.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const validLevels = ['trace', 'debug', 'info', 'warning', 'error', 'fatal'];
+      let minLevel: CoreLogLevel | undefined;
+      if (options.level) {
+        const normalized = options.level.toLowerCase();
+        if (!validLevels.includes(normalized)) {
+          const message = `Invalid --level '${options.level}'. Expected one of: ${validLevels.join(', ')}.`;
+          if (options.json) outputJsonError(message);
+          logger.error(message);
+          process.exit(1);
+        }
+        minLevel = normalized as CoreLogLevel;
+      }
+
+      const spinner = makeSpinner(
+        `Inspecting ${files.length} log file${files.length === 1 ? '' : 's'}...`,
+        !!options.json,
+      ).start();
+      try {
+        const report = inspectCoreLogs({
+          files,
+          filters: {
+            minLevel,
+            component: options.component,
+            since: options.since,
+            until: options.until,
+            search: options.search,
+          },
+        });
+        spinner.succeed('Log inspection complete.');
+        writeResult(report, options, formatCoreLogInspectionReport(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-210: Stellar Core Configuration Compatibility and Deprecation Audit
+// ---------------------------------------------------------------------------
+program
+  .command('core-config-compat <config>')
+  .description('Audit Stellar Core configuration for deprecated, renamed, or version-incompatible settings')
+  .option('--target-version <version>', 'Target Stellar Core version (e.g. 19.4.0)')
+  .option('--version-source <path>', 'Local diagnostic file from which to extract the target version')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      config: string,
+      options: { targetVersion?: string; versionSource?: string; json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!config) {
+        const message = 'Provide a Stellar Core configuration file to audit.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner('Auditing Stellar Core configuration compatibility...', !!options.json).start();
+      try {
+        const report = auditConfigCompatibility({
+          configPath: config,
+          targetVersion: options.targetVersion,
+          versionSourcePath: options.versionSource,
+        });
+        spinner.succeed('Configuration compatibility audit complete.');
+        writeResult(report, options, formatConfigCompatAuditReport(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// ISSUE-211: Stellar Core Validator Identity and Public Key Consistency Audit
+// ---------------------------------------------------------------------------
+program
+  .command('core-validator-identity <files...>')
+  .description('Audit Stellar Core validator identities and public key references across configuration files')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .option('-v, --verbose', 'Verbose mode')
+  .action(
+    async (
+      files: string[],
+      options: { json?: boolean; output?: string; verbose?: boolean },
+    ) => {
+      if (options.verbose) logger.setLevel('debug');
+      if (options.json) logger.setJsonMode(true);
+
+      if (!files || files.length === 0) {
+        const message = 'Provide at least one Stellar Core configuration file to audit.';
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        `Auditing validator identities across ${files.length} file${files.length === 1 ? '' : 's'}...`,
+        !!options.json,
+      ).start();
+      try {
+        const report = auditValidatorIdentity({ files });
+        spinner.succeed('Validator identity audit complete.');
+        writeResult(report, options, formatValidatorIdentityAuditReport(report));
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         spinner.fail(message);
