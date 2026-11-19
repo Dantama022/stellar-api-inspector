@@ -1329,6 +1329,204 @@ npm run dev -- analyze-tx <hash> --json --output analysis.json
 }
 ```
 
+### Stellar Core Prometheus Metrics Inspection
+
+Inspect locally exported Prometheus metrics snapshots from Stellar Core without connecting to a running node:
+
+```bash
+npm run dev -- core-metrics ./fixtures/metrics-1.prom
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --output metrics-report.json
+```
+
+**Supported input formats:** Prometheus text exposition format (`# HELP`, `# TYPE`, and sample lines). Counters, gauges, histograms (`_bucket`, `_sum`, `_count`), and summaries (quantiles, `_sum`, `_count`) are parsed according to their declared type. Metric names, labels, and timestamps are preserved where present.
+
+**Comparison and thresholds:**
+
+```bash
+# Compare two snapshots
+npm run dev -- core-metrics ./fixtures/metrics-1.prom --compare ./fixtures/metrics-2.prom
+
+# Flag metric values above a threshold (repeatable)
+npm run dev -- core-metrics ./fixtures/metrics-1.prom \
+  --threshold 'stellar_core_ledger_close_time_seconds>5' \
+  --threshold 'stellar_core_peer_count<3'
+```
+
+- Counter changes are calculated only when both observations are comparable; counter resets are reported as resets, not as ordinary decreases.
+- Missing, newly appearing, and changed series are listed separately.
+- Missing metrics are **not** treated as failures — availability varies by Stellar Core version and deployment configuration.
+- Threshold warnings are heuristic and clearly labeled as such, distinct from observed values and calculated changes.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/metrics-1.prom",
+    "summary": {
+      "metricCount": 12,
+      "seriesCount": 34,
+      "byType": { "counter": 5, "gauge": 4, "histogram": 2, "summary": 1 }
+    },
+    "metrics": [
+      {
+        "name": "stellar_core_ledger_close_time_seconds",
+        "type": "gauge",
+        "help": "Ledger close time in seconds",
+        "series": [
+          { "labels": { "ledger": "50000000" }, "value": 5.1, "timestamp": null }
+        ]
+      }
+    ],
+    "comparison": {
+      "changed": [],
+      "missing": [],
+      "new": [],
+      "counterResets": []
+    },
+    "warnings": [],
+    "diagnostics": []
+  }
+}
+```
+
+**Limitations:** Timestamps are only available when present in the export. Counter changes require comparable observations; resets and gaps are reported explicitly. Malformed samples, duplicate series, and unsupported representations are reported as diagnostics rather than aborting the inspection.
+
+### Stellar Core Metrics Export Validation
+
+Validate the structural consistency of a local Prometheus metrics export:
+
+```bash
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --json
+npm run dev -- core-metrics-validate ./fixtures/metrics-1.prom --output validation.json
+```
+
+The validator reuses the metrics parser and checks:
+
+- metric name and exposition syntax
+- consistency between `# TYPE` declarations and sample types
+- duplicate metric declarations and conflicting type definitions
+- label formatting and duplicate label names
+- duplicate time series within the same export
+- histogram bucket ordering and cumulative bucket consistency
+- summary quantile representations
+- invalid numeric samples (including non-finite values where prohibited)
+
+Findings carry a severity (`error`, `warning`, `info`) and a source location (line/column) where available. Missing optional metadata (such as `# HELP`) is reported as informational, not as a format violation. Validation is read-only and never modifies the supplied files.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/metrics-1.prom",
+    "valid": false,
+    "counts": { "error": 1, "warning": 2, "info": 1 },
+    "findings": [
+      {
+        "severity": "error",
+        "code": "duplicate-series",
+        "message": "Duplicate time series for stellar_core_peer_count{type=\"inbound\"}",
+        "location": { "line": 42, "column": 1 }
+      }
+    ]
+  }
+}
+```
+
+### Stellar Core SCP Consensus State Inspection
+
+Inspect locally supplied Stellar Core SCP status or diagnostic output:
+
+```bash
+npm run dev -- scp-state ./fixtures/scp-status.json
+npm run dev -- scp-state ./fixtures/scp-status.json --compare ./fixtures/scp-status-2.json
+npm run dev -- scp-state ./fixtures/scp-status.json --json
+```
+
+**Supported input formats:** documented SCP status/diagnostic representations supplied as local files. The command extracts ledger slot identifiers, nomination and ballot phase information, and commit/prepared/externalized state where exposed by the input, and summarizes consensus state per ledger slot.
+
+- Inconsistent or malformed slot references are reported with source references.
+- Potentially stalled states are reported only when timestamps or repeated observations support the finding.
+- Missing or unavailable consensus fields are reported as unavailable, not as confirmed failures.
+- The report clearly distinguishes **local observations**, **inferred conditions**, and **conclusions that require additional network data**. A single local snapshot never establishes network-wide consensus health.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/scp-status.json",
+    "slots": [
+      {
+        "slot": 50000000,
+        "nomination": { "phase": "nominating", "values": [] },
+        "ballot": { "counter": 2, "value": "..." },
+        "state": "externalized",
+        "observedAt": "2024-01-15T12:00:00.000Z"
+      }
+    ],
+    "comparison": { "changes": [] },
+    "observations": [],
+    "inferences": [],
+    "requiresNetworkData": [],
+    "diagnostics": []
+  }
+}
+```
+
+### Stellar Core Administrative Endpoint Security Audit
+
+Audit administrative endpoint exposure from local Stellar Core configuration:
+
+```bash
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --listening ./fixtures/listening.json
+npm run dev -- core-endpoint-audit ./fixtures/stellar-core.cfg --json
+```
+
+The audit reuses the existing Stellar Core configuration parsing utilities and identifies documented HTTP administrative and operational interfaces, their configured binding addresses and ports, and available access-control settings.
+
+- Binding addresses are classified as loopback, private, wildcard, or public.
+- Administrative interfaces bound to potentially public addresses are flagged with severity levels and remediation guidance.
+- Unexpected or conflicting port assignments are reported where configuration information is sufficient.
+- Missing or weak access-control settings are flagged only where the endpoint's documented security model supports them.
+- Missing information is reported as **inconclusive**, not as a confirmed vulnerability.
+- The report distinguishes **configured exposure** from **independently verified network reachability**. A publicly bound endpoint is not assumed to be reachable through the surrounding network.
+- Optional `--listening` comparison uses an explicitly supplied listening-interface diagnostic; the audit performs no administrative requests and never modifies configuration.
+- Sensitive configuration values (such as secrets and keys) are redacted from all output formats.
+
+**JSON output structure:**
+
+```json
+{
+  "ok": true,
+  "data": {
+    "source": "./fixtures/stellar-core.cfg",
+    "endpoints": [
+      {
+        "name": "HTTP_PORT",
+        "address": "0.0.0.0",
+        "port": 11626,
+        "classification": "wildcard",
+        "accessControl": "none",
+        "severity": "high",
+        "findings": ["Administrative interface bound to a wildcard address"],
+        "remediation": ["Bind to 127.0.0.1 or restrict access with a firewall"]
+      }
+    ],
+    "listeningComparison": null,
+    "inconclusive": [],
+    "notes": ["Configured exposure is not verified external reachability."]
+  }
+}
+```
+
 ### Options
 - `-j, --json`: Return raw JSON instead of formatted CLI tables (great for shell pipelines).
 - `-o, --output <path>`: Save inspection output directly to a file (JSON or Markdown).
