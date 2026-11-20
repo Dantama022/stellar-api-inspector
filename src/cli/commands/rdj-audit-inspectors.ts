@@ -9,6 +9,7 @@ import {
   formatRdjFeeReconciliation,
   reconcileTransactionFee,
 } from '../../services/rdj-fee-payment-reconciliation';
+import { formatRdjTxSetReport, inspectTransactionSet } from '../../services/rdj-transaction-set-inspection';
 
 function readInput(file: string): string {
   return file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
@@ -52,6 +53,22 @@ export function registerRdjAuditInspectorsCommands(program: Command): void {
       try {
         const r = reconcileTransactionFee(xdr, options.feeCharged, options.passphrase);
         emit(r, options.json, formatRdjFeeReconciliation(r));
+      } catch (err) {
+        fail(err, options.json);
+      }
+    });
+
+  program
+    .command('rdj-inspect-tx-set')
+    .description('Inspect TransactionSet XDR and verify its hash (offline)')
+    .argument('<file>', 'File with base64 TransactionSet XDR, or - for stdin')
+    .option('--expected-hash <hex>', 'Expected transaction set hash to compare')
+    .option('--json', 'Output JSON')
+    .action((file: string, options: { expectedHash?: string; json?: boolean }) => {
+      try {
+        const r = inspectTransactionSet(readInput(file), options.expectedHash);
+        emit(r, options.json, formatRdjTxSetReport(r));
+        if (r.hashMatches === false) process.exitCode = 1;
       } catch (err) {
         fail(err, options.json);
       }
