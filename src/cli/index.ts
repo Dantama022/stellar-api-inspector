@@ -43,6 +43,7 @@ import { logger } from '../utils/logger';
 import { registerRdjSavyyCommands } from './commands/rdj-savyy';
 import { validateHorizonUrl } from '../utils/urls';
 import { registerFreezyyyArchCommands } from './commands/freezyyy-arch';
+import { registerRdjAuditInspectorsCommands } from './commands/rdj-audit-inspectors';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
@@ -816,6 +817,7 @@ program
   );
 
 registerFreezyyyArchCommands(program);
+registerRdjAuditInspectorsCommands(program);
 registerStellarCoreOpsCommands(program);
 
 program
