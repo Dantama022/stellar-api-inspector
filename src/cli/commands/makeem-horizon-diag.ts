@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { analyzeHorizonRateLimit, formatRateLimitReport } from '../../services/mk-horizon-rate-limit';
 import { auditHorizonRedirects, formatRedirectAuditReport } from '../../services/mk-horizon-redirect-audit';
+import { inspectLedgerEntryXdr, formatLedgerEntryReport } from '../../services/mk-ledger-entry-inspector';
+import fs from 'fs';
 import { diagnoseHorizonCache, formatCacheDiagnosticReport } from '../../services/mk-horizon-cache-diagnostics';
 
 function emitMk(data: unknown, json: boolean | undefined, text: string): void {
@@ -56,5 +58,22 @@ export function registerMakeemHorizonDiagCommands(program: Command): void {
         timeoutMs: parseInt(o.timeout, 10) || 10000,
       });
       emitMk(report, o.json, formatRedirectAuditReport(report));
+    });
+
+  program
+    .command('ledger-entry-xdr <source>')
+    .description('Decode and validate a LedgerEntry XDR offline (file path, or - for stdin)')
+    .option('-j, --json', 'Output raw JSON')
+    .action((source: string, o: { json?: boolean }) => {
+      let input: string;
+      try {
+        input = fs.readFileSync(source === '-' ? 0 : source, 'utf8');
+      } catch (e) {
+        process.stderr.write(`Cannot read input: ${e instanceof Error ? e.message : String(e)}\n`);
+        process.exit(1);
+      }
+      const report = inspectLedgerEntryXdr(input);
+      emitMk(report, o.json, formatLedgerEntryReport(report));
+      if (!report.valid) process.exitCode = 1;
     });
 }
