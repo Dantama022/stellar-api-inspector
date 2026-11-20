@@ -3,6 +3,7 @@ import fs from 'fs';
 import { outputJson, outputJsonError } from '../../output/json';
 import { auditHorizonPagination, formatPaginationAuditReport } from '../../services/horizon-pagination-completeness-audit';
 import { auditEnvelopeSize, formatEnvelopeSizeReport, parseLimitSpec, SizeLimit } from '../../services/tx-envelope-size-audit';
+import { auditSequenceConsumption, formatSequenceConsumptionReport } from '../../services/sequence-consumption-audit';
 
 export function registerValrebAuditCommands(program: Command): void {
   program
@@ -44,5 +45,31 @@ export function registerValrebAuditCommands(program: Command): void {
       if (options.json) outputJson(report);
       else process.stdout.write(formatEnvelopeSizeReport(report) + '\n');
       if (report.status === 'invalid' || report.status === 'limit-exceeded') process.exit(2);
+    });
+
+  program
+    .command('sequence-consumption <account>')
+    .description('Summarize observed sequence-number consumption and throughput for an account (read-only)')
+    .option('--horizon <url>', 'Horizon URL', 'https://horizon-testnet.stellar.org')
+    .option('--start-time <iso>', 'Interval start time')
+    .option('--end-time <iso>', 'Interval end time')
+    .option('--start-ledger <n>', 'Interval start ledger', (v: string) => parseInt(v, 10))
+    .option('--end-ledger <n>', 'Interval end ledger', (v: string) => parseInt(v, 10))
+    .option('--max-pages <n>', 'Maximum pages to fetch', (v: string) => parseInt(v, 10))
+    .option('--json', 'Output as JSON')
+    .action(async (account: string, options: any) => {
+      try {
+        const report = await auditSequenceConsumption(options.horizon, account, {
+          startTime: options.startTime, endTime: options.endTime,
+          startLedger: options.startLedger, endLedger: options.endLedger, maxPages: options.maxPages,
+        });
+        if (options.json) outputJson(report);
+        else process.stdout.write(formatSequenceConsumptionReport(report) + '\n');
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (options.json) outputJsonError(msg, 1);
+        process.stderr.write(msg + '\n');
+        process.exit(1);
+      }
     });
 }
