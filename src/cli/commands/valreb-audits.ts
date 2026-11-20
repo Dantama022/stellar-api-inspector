@@ -4,6 +4,7 @@ import { outputJson, outputJsonError } from '../../output/json';
 import { auditHorizonPagination, formatPaginationAuditReport } from '../../services/horizon-pagination-completeness-audit';
 import { auditEnvelopeSize, formatEnvelopeSizeReport, parseLimitSpec, SizeLimit } from '../../services/tx-envelope-size-audit';
 import { auditSequenceConsumption, formatSequenceConsumptionReport } from '../../services/sequence-consumption-audit';
+import { auditMemoEncoding, formatMemoEncodingReport } from '../../services/tx-memo-encoding-audit';
 
 export function registerValrebAuditCommands(program: Command): void {
   program
@@ -71,5 +72,16 @@ export function registerValrebAuditCommands(program: Command): void {
         process.stderr.write(msg + '\n');
         process.exit(1);
       }
+    });
+
+  program
+    .command('tx-memo-encoding <xdr>')
+    .description('Validate memo type and encoding of a transaction envelope (read-only)')
+    .option('--json', 'Output as JSON')
+    .action((xdrInput: string, options: { json?: boolean }) => {
+      const report = auditMemoEncoding(xdrInput);
+      if (options.json) outputJson(report);
+      else process.stdout.write(formatMemoEncodingReport(report) + '\n');
+      if (report.status !== 'valid') process.exit(2);
     });
 }
