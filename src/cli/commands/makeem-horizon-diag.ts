@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { analyzeHorizonRateLimit, formatRateLimitReport } from '../../services/mk-horizon-rate-limit';
+import { auditHorizonRedirects, formatRedirectAuditReport } from '../../services/mk-horizon-redirect-audit';
 import { diagnoseHorizonCache, formatCacheDiagnosticReport } from '../../services/mk-horizon-cache-diagnostics';
 
 function emitMk(data: unknown, json: boolean | undefined, text: string): void {
@@ -37,5 +38,23 @@ export function registerMakeemHorizonDiagCommands(program: Command): void {
         timeoutMs: parseInt(o.timeout, 10) || 10000,
       });
       emitMk(report, o.json, formatRateLimitReport(report));
+    });
+
+  program
+    .command('horizon-redirect-audit <url>')
+    .description('Audit Horizon HTTP redirect chain and canonicalization (read-only)')
+    .option('--no-follow', 'Inspect the first response without following redirects')
+    .option('--max-redirects <n>', 'Maximum redirect depth', '5')
+    .option('--allow-cross-host', 'Follow redirects to a different host')
+    .option('--timeout <ms>', 'Request timeout in ms', '10000')
+    .option('-j, --json', 'Output raw JSON')
+    .action(async (url: string, o: { follow: boolean; maxRedirects: string; allowCrossHost?: boolean; timeout: string; json?: boolean }) => {
+      const report = await auditHorizonRedirects(url, {
+        follow: o.follow,
+        maxRedirects: parseInt(o.maxRedirects, 10) || 5,
+        allowCrossHost: o.allowCrossHost,
+        timeoutMs: parseInt(o.timeout, 10) || 10000,
+      });
+      emitMk(report, o.json, formatRedirectAuditReport(report));
     });
 }
