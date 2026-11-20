@@ -42,6 +42,7 @@ import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { registerRdjSavyyCommands } from './commands/rdj-savyy';
 import { validateHorizonUrl } from '../utils/urls';
+import { registerFzAuditCommands } from './commands/fz-audits';
 import { registerFreezyyyArchCommands } from './commands/freezyyy-arch';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
@@ -346,6 +347,7 @@ program
 // 2. Soroban RPC Checker
 // ---------------------------------------------------------------------------
 registerRdjSavyyCommands(program);
+registerFzAuditCommands(program);
 
 program
   .command('soroban <url>')
