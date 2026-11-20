@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { analyzeHorizonRateLimit, formatRateLimitReport } from '../../services/mk-horizon-rate-limit';
 import { diagnoseHorizonCache, formatCacheDiagnosticReport } from '../../services/mk-horizon-cache-diagnostics';
 
 function emitMk(data: unknown, json: boolean | undefined, text: string): void {
@@ -20,5 +21,21 @@ export function registerMakeemHorizonDiagCommands(program: Command): void {
         timeoutMs: parseInt(o.timeout, 10) || 10000,
       });
       emitMk(report, o.json, formatCacheDiagnosticReport(report));
+    });
+
+  program
+    .command('horizon-rate-limit [endpoint]')
+    .description('Analyze Horizon rate-limit responses and retry guidance (read-only)')
+    .option('--requests <n>', 'Number of requests (max 10)', '1')
+    .option('--delay <ms>', 'Delay between requests in ms (min 500)', '1000')
+    .option('--timeout <ms>', 'Request timeout in ms', '10000')
+    .option('-j, --json', 'Output raw JSON')
+    .action(async (endpoint: string | undefined, o: { requests: string; delay: string; timeout: string; json?: boolean }) => {
+      const report = await analyzeHorizonRateLimit(endpoint ?? 'https://horizon-testnet.stellar.org/', {
+        requests: parseInt(o.requests, 10) || 1,
+        delayMs: parseInt(o.delay, 10) || 1000,
+        timeoutMs: parseInt(o.timeout, 10) || 10000,
+      });
+      emitMk(report, o.json, formatRateLimitReport(report));
     });
 }
