@@ -10,6 +10,7 @@ import {
   reconcileTransactionFee,
 } from '../../services/rdj-fee-payment-reconciliation';
 import { formatRdjTxSetReport, inspectTransactionSet } from '../../services/rdj-transaction-set-inspection';
+import { formatRdjLedgerKeyReport, inspectLedgerKey } from '../../services/rdj-ledger-key-inspection';
 
 function readInput(file: string): string {
   return file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
@@ -69,6 +70,20 @@ export function registerRdjAuditInspectorsCommands(program: Command): void {
         const r = inspectTransactionSet(readInput(file), options.expectedHash);
         emit(r, options.json, formatRdjTxSetReport(r));
         if (r.hashMatches === false) process.exitCode = 1;
+      } catch (err) {
+        fail(err, options.json);
+      }
+    });
+
+  program
+    .command('rdj-inspect-ledger-key')
+    .description('Inspect LedgerKey XDR and identify the ledger entry (offline)')
+    .argument('<xdr>', 'Base64 LedgerKey XDR, or - for stdin')
+    .option('--json', 'Output JSON')
+    .action((input: string, options: { json?: boolean }) => {
+      try {
+        const r = inspectLedgerKey(input === '-' ? readInput('-') : input);
+        emit(r, options.json, formatRdjLedgerKeyReport(r));
       } catch (err) {
         fail(err, options.json);
       }
