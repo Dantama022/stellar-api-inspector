@@ -4,6 +4,7 @@ import { auditHorizonTls, formatFzTlsAudit } from '../../services/fz-tls-audit';
 import { diagnoseCompression, formatFzCompression } from '../../services/fz-compression-diagnostics';
 import { fzReadXdrInput } from '../../services/fz-xdr-input';
 import { inspectLedgerCloseMeta, formatFzLedgerCloseMeta } from '../../services/fz-ledger-close-meta';
+import { inspectLedgerHeader, formatFzLedgerHeader } from '../../services/fz-ledger-header';
 
 function fzFail(message: string, json?: boolean): never {
   if (json) outputJsonError(message);
@@ -53,6 +54,19 @@ export function registerFzAuditCommands(program: Command): void {
       try {
         const r = inspectLedgerCloseMeta(fzReadXdrInput(source));
         process.stdout.write((o.json ? JSON.stringify({ ok: true, data: r }, null, 2) : formatFzLedgerCloseMeta(r)) + '\n');
+      } catch (e) {
+        fzFail((e as Error).message, o.json);
+      }
+    });
+
+  program
+    .command('fz-ledger-header <source>')
+    .description('Offline inspection of LedgerHeader XDR (file path or - for stdin)')
+    .option('-j, --json', 'Output raw JSON')
+    .action((source: string, o: { json?: boolean }) => {
+      try {
+        const r = inspectLedgerHeader(fzReadXdrInput(source));
+        process.stdout.write((o.json ? JSON.stringify({ ok: true, data: r }, null, 2) : formatFzLedgerHeader(r)) + '\n');
       } catch (e) {
         fzFail((e as Error).message, o.json);
       }
