@@ -11,6 +11,10 @@
 
 import { validateHorizonUrl as _validateHorizonUrl } from '../utils/urls';
 import { normalizeNetworkPassphrase } from '../services/network-validator';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import { execFileSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // JSON-RPC transport (for Soroban RPC)

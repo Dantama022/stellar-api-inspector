@@ -493,3 +493,319 @@ export function formatMemoPrivacyWarningRows(warnings: string[]): string[][] {
   }
   return rows;
 }
+
+/**
+ * Format filesystem capacity measurements for the Stellar Core storage
+ * diagnostics. These values describe the filesystem containing the data
+ * directory, not Stellar Core storage consumption.
+ */
+export function formatStorageCapacityRows(capacity: {
+  path?: string;
+  mountPoint?: string;
+  filesystem?: string;
+  totalBytes?: number | null;
+  usedBytes?: number | null;
+  availableBytes?: number | null;
+  utilizationPercent?: number | null;
+  warningThresholdPercent?: number | null;
+  pressureDetected?: boolean;
+  notes?: string[];
+}): string[][] {
+  const rows: string[][] = [['Field', 'Value']];
+  rows.push(['Data Directory', displayValue(capacity.path)]);
+  rows.push(['Mount Point', displayValue(capacity.mountPoint)]);
+  rows.push(['Filesystem', displayValue(capacity.filesystem)]);
+  rows.push([
+    'Total Capacity',
+    capacity.totalBytes === undefined || capacity.totalBytes === null
+      ? UNKNOWN_VALUE
+      : formatBytes(capacity.totalBytes),
+  ]);
+  rows.push([
+    'Used Capacity',
+    capacity.usedBytes === undefined || capacity.usedBytes === null
+      ? UNKNOWN_VALUE
+      : formatBytes(capacity.usedBytes),
+  ]);
+  rows.push([
+    'Available Capacity',
+    capacity.availableBytes === undefined || capacity.availableBytes === null
+      ? UNKNOWN_VALUE
+      : formatBytes(capacity.availableBytes),
+  ]);
+  rows.push([
+    'Utilization',
+    capacity.utilizationPercent === undefined || capacity.utilizationPercent === null
+      ? UNKNOWN_VALUE
+      : `${capacity.utilizationPercent.toFixed(2)}%`,
+  ]);
+  rows.push([
+    'Warning Threshold',
+    capacity.warningThresholdPercent === undefined || capacity.warningThresholdPercent === null
+      ? UNKNOWN_VALUE
+      : `${capacity.warningThresholdPercent}%`,
+  ]);
+  rows.push([
+    'Capacity Pressure',
+    capacity.pressureDetected === undefined ? UNKNOWN_VALUE : String(capacity.pressureDetected),
+  ]);
+  if (capacity.notes && capacity.notes.length > 0) {
+    rows.push(['Notes', capacity.notes.join('; ')]);
+  }
+  return rows;
+}
+
+/**
+ * Format disk I/O sampling summaries. These describe filesystem-wide activity
+ * and must not be presented as Stellar Core process-specific I/O.
+ */
+export function formatStorageIoRows(io: {
+  available: boolean;
+  scope?: string;
+  sampleIntervalMs?: number;
+  sampleCount?: number;
+  readBytesPerSecond?: number | null;
+  writeBytesPerSecond?: number | null;
+  readOperationsPerSecond?: number | null;
+  writeOperationsPerSecond?: number | null;
+  counterResetDetected?: boolean;
+  message?: string;
+}): string[][] {
+  const rows: string[][] = [['Field', 'Value']];
+  rows.push(['I/O Statistics Available', String(io.available)]);
+  rows.push(['Measurement Scope', displayValue(io.scope ?? 'filesystem-wide')]);
+  rows.push([
+    'Sample Interval',
+    io.sampleIntervalMs === undefined ? UNKNOWN_VALUE : `${io.sampleIntervalMs} ms`,
+  ]);
+  rows.push(['Sample Count', io.sampleCount === undefined ? UNKNOWN_VALUE : String(io.sampleCount)]);
+  rows.push([
+    'Read Throughput',
+    io.readBytesPerSecond === undefined || io.readBytesPerSecond === null
+      ? UNKNOWN_VALUE
+      : `${formatBytes(io.readBytesPerSecond)}/s`,
+  ]);
+  rows.push([
+    'Write Throughput',
+    io.writeBytesPerSecond === undefined || io.writeBytesPerSecond === null
+      ? UNKNOWN_VALUE
+      : `${formatBytes(io.writeBytesPerSecond)}/s`,
+  ]);
+  rows.push([
+    'Read Operations',
+    io.readOperationsPerSecond === undefined || io.readOperationsPerSecond === null
+      ? UNKNOWN_VALUE
+      : `${io.readOperationsPerSecond.toFixed(2)}/s`,
+  ]);
+  rows.push([
+    'Write Operations',
+    io.writeOperationsPerSecond === undefined || io.writeOperationsPerSecond === null
+      ? UNKNOWN_VALUE
+      : `${io.writeOperationsPerSecond.toFixed(2)}/s`,
+  ]);
+  rows.push([
+    'Counter Reset Detected',
+    io.counterResetDetected === undefined ? UNKNOWN_VALUE : String(io.counterResetDetected),
+  ]);
+  rows.push(['Message', displayValue(io.message)]);
+  return rows;
+}
+
+/**
+ * Format backup artifact integrity results for the backup integrity audit.
+ * Checksum verification does not prove that a backup can be restored.
+ */
+export function formatBackupArtifactRows(
+  artifacts: Array<{
+    path: string;
+    status: string;
+    expectedChecksum?: string;
+    actualChecksum?: string;
+    sizeBytes?: number | null;
+    expectedSizeBytes?: number | null;
+    message?: string;
+  }>
+): string[][] {
+  const rows: string[][] = [
+    ['Artifact', 'Status', 'Expected SHA-256', 'Actual SHA-256', 'Size', 'Message'],
+  ];
+  if (artifacts.length === 0) {
+    rows.push(['No artifacts', '-', '-', '-', '-', '-']);
+    return rows;
+  }
+  for (const artifact of artifacts) {
+    rows.push([
+      displayValue(artifact.path),
+      displayValue(artifact.status),
+      displayValue(artifact.expectedChecksum),
+      displayValue(artifact.actualChecksum),
+      artifact.sizeBytes === undefined || artifact.sizeBytes === null
+        ? UNKNOWN_VALUE
+        : formatBytes(artifact.sizeBytes),
+      displayValue(artifact.message),
+    ]);
+  }
+  return rows;
+}
+
+/**
+ * Format backup age and recovery point objective (RPO) evaluation results.
+ */
+export function formatBackupAgeRows(age: {
+  createdAt?: string | null;
+  ageSeconds?: number | null;
+  rpoSeconds?: number | null;
+  withinRpo?: boolean | null;
+  versionMetadata?: string | null;
+  notes?: string[];
+}): string[][] {
+  const rows: string[][] = [['Field', 'Value']];
+  rows.push(['Backup Created At', displayValue(age.createdAt)]);
+  rows.push([
+    'Backup Age',
+    age.ageSeconds === undefined || age.ageSeconds === null
+      ? UNKNOWN_VALUE
+      : `${age.ageSeconds} seconds`,
+  ]);
+  rows.push([
+    'Recovery Point Objective',
+    age.rpoSeconds === undefined || age.rpoSeconds === null
+      ? UNKNOWN_VALUE
+      : `${age.rpoSeconds} seconds`,
+  ]);
+  rows.push([
+    'Within RPO',
+    age.withinRpo === undefined || age.withinRpo === null ? UNKNOWN_VALUE : String(age.withinRpo),
+  ]);
+  rows.push(['Stellar Core Version', displayValue(age.versionMetadata)]);
+  if (age.notes && age.notes.length > 0) {
+    rows.push(['Notes', age.notes.join('; ')]);
+  }
+  return rows;
+}
+
+/**
+ * Format backup retention status rows for the retention audit. Findings
+ * distinguish policy violations from optional storage optimizations.
+ */
+export function formatBackupRetentionRows(
+  entries: Array<{
+    reference: string;
+    category?: string;
+    createdAt?: string | null;
+    status: string;
+    classification?: string;
+    sizeBytes?: number | null;
+    checksum?: string | null;
+    message?: string;
+  }>
+): string[][] {
+  const rows: string[][] = [
+    ['Backup', 'Category', 'Created At', 'Status', 'Classification', 'Size', 'Checksum', 'Message'],
+  ];
+  if (entries.length === 0) {
+    rows.push(['No backups', '-', '-', '-', '-', '-', '-', '-']);
+    return rows;
+  }
+  for (const entry of entries) {
+    rows.push([
+      displayValue(entry.reference),
+      displayValue(entry.category),
+      displayValue(entry.createdAt),
+      displayValue(entry.status),
+      displayValue(entry.classification),
+      entry.sizeBytes === undefined || entry.sizeBytes === null
+        ? UNKNOWN_VALUE
+        : formatBytes(entry.sizeBytes),
+      displayValue(entry.checksum),
+      displayValue(entry.message),
+    ]);
+  }
+  return rows;
+}
+
+/**
+ * Format retention summary rows (expired, near-expiration, gaps, duplicates,
+ * and estimated storage) for the retention audit.
+ */
+export function formatBackupRetentionSummaryRows(summary: {
+  expiredCount?: number | null;
+  nearExpirationCount?: number | null;
+  gapCount?: number | null;
+  duplicateCount?: number | null;
+  expiredStorageBytes?: number | null;
+  redundantStorageBytes?: number | null;
+  notes?: string[];
+}): string[][] {
+  const rows: string[][] = [['Metric', 'Value']];
+  rows.push([
+    'Expired Backups',
+    summary.expiredCount === undefined || summary.expiredCount === null
+      ? UNKNOWN_VALUE
+      : String(summary.expiredCount),
+  ]);
+  rows.push([
+    'Backups Near Expiration',
+    summary.nearExpirationCount === undefined || summary.nearExpirationCount === null
+      ? UNKNOWN_VALUE
+      : String(summary.nearExpirationCount),
+  ]);
+  rows.push([
+    'Retention Gaps',
+    summary.gapCount === undefined || summary.gapCount === null
+      ? UNKNOWN_VALUE
+      : String(summary.gapCount),
+  ]);
+  rows.push([
+    'Duplicate Backups',
+    summary.duplicateCount === undefined || summary.duplicateCount === null
+      ? UNKNOWN_VALUE
+      : String(summary.duplicateCount),
+  ]);
+  rows.push([
+    'Expired Storage',
+    summary.expiredStorageBytes === undefined || summary.expiredStorageBytes === null
+      ? UNKNOWN_VALUE
+      : formatBytes(summary.expiredStorageBytes),
+  ]);
+  rows.push([
+    'Redundant Storage',
+    summary.redundantStorageBytes === undefined || summary.redundantStorageBytes === null
+      ? UNKNOWN_VALUE
+      : formatBytes(summary.redundantStorageBytes),
+  ]);
+  if (summary.notes && summary.notes.length > 0) {
+    rows.push(['Notes', summary.notes.join('; ')]);
+  }
+  return rows;
+}
+
+/**
+ * Format JSON-RPC protocol compliance findings for the Soroban RPC audit.
+ * Findings identify the affected message and explain the validation failure.
+ */
+export function formatJsonRpcFindingRows(
+  findings: Array<{
+    severity: string;
+    code?: string;
+    message: string;
+    messageId?: string | number | null;
+    remediation?: string;
+  }>
+): string[][] {
+  const rows: string[][] = [['Severity', 'Code', 'Message ID', 'Finding', 'Remediation']];
+  if (findings.length === 0) {
+    rows.push(['info', '-', '-', 'No protocol findings reported', '-']);
+    return rows;
+  }
+  for (const finding of findings) {
+    rows.push([
+      displayValue(finding.severity),
+      displayValue(finding.code),
+      displayValue(finding.messageId),
+      finding.message,
+      displayValue(finding.remediation),
+    ]);
+  }
+  return rows;
+}
