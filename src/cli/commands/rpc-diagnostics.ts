@@ -14,6 +14,14 @@ import {
   formatCapabilityReport,
 } from '../../services/rpc-capability-discovery';
 import {
+  buildRpcRequestExample,
+  decodeLedgerKey,
+  encodeLedgerKey,
+  formatDecodedKey,
+  KeyInput,
+  SUPPORTED_KEY_TYPES,
+} from '../../services/ledger-key-builder';
+import {
   formatNetworkIdentityReports,
   resolveExpectedNetwork,
   verifyNetworkIdentity,
@@ -96,5 +104,54 @@ export function registerRpcDiagnosticsCommands(program: Command): void {
         for (const u of urls) reports.push(await verifyNetworkIdentity(u, expected, { timeoutMs: parseInt(o.timeout, 10) }));
         return [{ expected, reports }, formatNetworkIdentityReports(reports)];
       }),
+  );
+
+  withCommon(
+    program
+      .command('ledger-key-build <type>')
+      .description(`Build a getLedgerEntries key (XDR base64). Types: ${SUPPORTED_KEY_TYPES.join(', ')}.`)
+      .option('--account <G...>', 'Account ID (account, trustline, offer, data)')
+      .option('--asset <asset>', 'native or CODE:ISSUER (trustline)')
+      .option('--offer-id <id>', 'Offer ID (offer)')
+      .option('--data-name <name>', 'Data entry name (data)')
+      .option('--balance-id <hex>', 'Claimable balance ID (claimable-balance)')
+      .option('--pool-id <hex>', 'Liquidity pool ID (liquidity-pool)')
+      .option('--contract <C...>', 'Contract ID (contract-data)')
+      .option('--key <scval-xdr>', 'ScVal XDR base64 storage key (contract-data; default: instance key)')
+      .option('--durability <d>', 'persistent or temporary (contract-data)')
+      .option('--wasm-hash <hex>', 'WASM hash (contract-code)'),
+  ).action((type: string, o: BaseOptions & Record<string, string | undefined>) =>
+    run(o, () => {
+      const input: KeyInput = {
+        type,
+        account: o.account,
+        asset: o.asset,
+        offerId: o.offerId,
+        dataName: o.dataName,
+        balanceId: o.balanceId,
+        poolId: o.poolId,
+        contract: o.contract,
+        key: o.key,
+        durability: o.durability,
+        wasmHash: o.wasmHash,
+      };
+      const xdrKey = encodeLedgerKey(input);
+      const decoded = decodeLedgerKey(xdrKey);
+      return [
+        { key: xdrKey, decoded, request: buildRpcRequestExample([xdrKey]) },
+        `${formatDecodedKey(decoded)}\nXDR: ${xdrKey}\nRPC request: ${JSON.stringify(buildRpcRequestExample([xdrKey]))}`,
+      ];
+    }),
+  );
+
+  withCommon(
+    program
+      .command('ledger-key-decode <xdr>')
+      .description('Decode a base64 LedgerKey XDR into a readable summary.'),
+  ).action((xdrKey: string, o: BaseOptions) =>
+    run(o, () => {
+      const decoded = decodeLedgerKey(xdrKey);
+      return [decoded, formatDecodedKey(decoded)];
+    }),
   );
 }
