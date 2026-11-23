@@ -22,6 +22,11 @@ import { formatContractInspectionReport } from '../output/contract-report';
 import { formatAccountMergeAudit } from '../output/account-merge-audit';
 import { auditAccount } from '../inspectors/account';
 import { auditAccountMerge, validateMergeAccountIds } from '../inspectors/account-merge-audit';
+import {
+  auditMergeDestinationCompatibility,
+  validateDestinationAuditIds,
+} from '../inspectors/account-merge-destination-audit';
+import { formatAccountMergeDestinationAudit } from '../output/account-merge-destination-audit';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
@@ -823,6 +828,54 @@ program
       spinner.succeed('Account merge audit complete.');
 
       writeResult(report, options, formatAccountMergeAudit(report));
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// Account Merge Destination Compatibility Audit (ISSUE-179)
+// ---------------------------------------------------------------------------
+program
+  .command('account-merge-destination-audit <sourceAccount> <destinationAccount>')
+  .description(
+    'Read-only audit of whether a destination account is compatible for receiving an account merge (ISSUE-179)',
+  )
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      sourceAccount: string,
+      destinationAccount: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+      const validation = validateDestinationAuditIds(sourceAccount, destinationAccount);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        'Inspecting destination account compatibility...',
+        !!options.json,
+      ).start();
+
+      try {
+        const report = await auditMergeDestinationCompatibility(
+          options.horizon,
+          sourceAccount,
+          destinationAccount,
+        );
+        spinner.succeed('Destination compatibility audit complete.');
+        writeResult(report, options, formatAccountMergeDestinationAudit(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
     },
   );
 
