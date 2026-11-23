@@ -85,6 +85,7 @@ import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
 import { registerTransactionHorizonDiagnosticsCommands } from './commands/transaction-horizon-diagnostics';
+import { registerEmeka12Commands } from './commands/emeka-12';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
@@ -826,6 +827,7 @@ program
 
 registerFreezyyyArchCommands(program);
 registerStellarCoreOpsCommands(program);
+registerEmeka12Commands(program);
 
 program
   .command('account-offers <accountId>')
