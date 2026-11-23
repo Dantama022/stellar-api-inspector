@@ -21,6 +21,7 @@ import {
   KeyInput,
   SUPPORTED_KEY_TYPES,
 } from '../../services/ledger-key-builder';
+import { analyzeLedgerTtl, formatTtlReport } from '../../services/ledger-ttl-boundary';
 import {
   formatNetworkIdentityReports,
   resolveExpectedNetwork,
@@ -153,5 +154,32 @@ export function registerRpcDiagnosticsCommands(program: Command): void {
       const decoded = decodeLedgerKey(xdrKey);
       return [decoded, formatDecodedKey(decoded)];
     }),
+  );
+
+  withCommon(
+    program
+      .command('ledger-ttl-analysis <url> <keys...>')
+      .description('Analyze TTL / expiration boundaries of ledger entries (base64 LedgerKey XDR). Read-only.')
+      .option('--warning <ledgers>', 'Warning threshold in ledgers', '17280')
+      .option('--critical <ledgers>', 'Critical threshold in ledgers', '5760')
+      .option('--reference-ledger <n>', 'Reference ledger (default: RPC latest ledger)')
+      .option('--ledger-close-seconds <s>', 'Assumed seconds per ledger, enables wall-clock estimates')
+      .option('--timeout <ms>', 'Request timeout in milliseconds', '10000'),
+  ).action(
+    (
+      url: string,
+      keys: string[],
+      o: BaseOptions & { warning: string; critical: string; referenceLedger?: string; ledgerCloseSeconds?: string; timeout: string },
+    ) =>
+      run(o, async () => {
+        const report = await analyzeLedgerTtl(url, keys, {
+          warningLedgers: parseInt(o.warning, 10),
+          criticalLedgers: parseInt(o.critical, 10),
+          referenceLedger: o.referenceLedger ? parseInt(o.referenceLedger, 10) : undefined,
+          ledgerCloseSeconds: o.ledgerCloseSeconds ? parseFloat(o.ledgerCloseSeconds) : undefined,
+          timeoutMs: parseInt(o.timeout, 10),
+        });
+        return [report, formatTtlReport(report)];
+      }),
   );
 }
