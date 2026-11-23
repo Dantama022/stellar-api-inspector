@@ -111,6 +111,7 @@ import { formatConfigCompatAuditReport } from '../output/stellar-core-config-com
 import { auditValidatorIdentity } from '../services/stellar-core-validator-identity-audit';
 import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
 import dotenv from 'dotenv';
+import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
 
 dotenv.config();
 
@@ -4075,6 +4076,8 @@ program
       }
     },
   );
+
+registerEmmanuellruth55Commands(program);
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {
