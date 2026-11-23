@@ -118,6 +118,7 @@ import { auditValidatorIdentity } from '../services/stellar-core-validator-ident
 import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
 import { registerDantama022Commands } from './commands/dantama022';
 import dotenv from 'dotenv';
+import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
 
 dotenv.config();
 
@@ -4132,6 +4133,8 @@ program
       }
     },
   );
+
+registerEmmanuellruth55Commands(program);
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {
