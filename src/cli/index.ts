@@ -110,6 +110,7 @@ import { auditConfigCompatibility } from '../services/stellar-core-config-compat
 import { formatConfigCompatAuditReport } from '../output/stellar-core-config-compat-audit-report';
 import { auditValidatorIdentity } from '../services/stellar-core-validator-identity-audit';
 import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
+import { registerDantama022Commands } from './commands/dantama022';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -204,6 +205,7 @@ function writeResult(
 // 1. Horizon Endpoint Checker
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
+registerDantama022Commands(program);
 
 program
   .command('horizon <url>')
