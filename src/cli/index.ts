@@ -81,6 +81,7 @@ import { auditAssetMetadata, AssetMetadataInput } from '../inspectors/asset-meta
 import { formatAssetMetadataAuditReport } from '../output/asset-metadata-audit-report';
 import { inspectTls } from '../services/tls-inspector';
 import { registerDevMakeemCommands } from './commands/dev-makeem';
+import { registerThanosmexcCommands } from './commands/thanosmexc';
 import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
@@ -1738,6 +1739,7 @@ registerSepCompliance2Commands(program);
 registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
 registerAccountAssetDiagnosticsCommands(program);
+registerThanosmexcCommands(program);
 
 
 
