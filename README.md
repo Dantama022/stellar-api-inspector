@@ -19,6 +19,8 @@ A command-line inspection and health-checking tool for Stellar Horizon and Sorob
 - **📈 Market Trade History**: Retrieve recent trades for any Stellar asset pair, display per-trade details, and compute summary statistics (volume, average/high/low price).
 - **📊 Account Offers & Claimable Balances**: Inspect open account offers, grouped trading pairs, and claimable balance predicates.
 - **📜 Operations History**: Fetch Horizon operations, filter by account/type/limit, and normalize common operation details.
+- **📤 Account Activity Export**: Export paginated transaction and operation history to JSON or CSV with date, asset, status, operation-type, and counterparty filters.
+- **⏱️ Transaction Inclusion Delay**: Compare user-supplied submission times with Horizon inclusion and ledger close timestamps without treating `created_at` as submission time.
 - **🧭 Interactive Mode**: Launch a guided menu when the CLI is run without arguments.
 - **⏱️ Rate Limit Tracker**: Read and analyze HTTP headers (`X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, `X-Ratelimit-Reset`) to help avoid rate limits in production.
 - **📋 Health Dashboard**: Benchmark latency, check synchronization, and compare performance across multiple endpoints concurrently.
@@ -218,6 +220,30 @@ npm run dev -- horizon https://horizon-testnet.stellar.org --json
 ```
 
 Endpoints served over plain `http://` report `httpsEnabled: false` with a warning recommending HTTPS. If the TLS handshake cannot be completed (timeout, connection refused, missing certificate), the command still succeeds and surfaces the failure under `tls.error` with a corresponding warning — Horizon endpoint inspection is never blocked by TLS issues.
+
+### Account Activity Export
+
+Export all available account transactions and their operations as nested JSON or one-operation-per-row CSV:
+
+```bash
+npm run dev -- account-activity-export G... --format json --since 2026-01-01T00:00:00Z
+npm run dev -- account-activity-export G... --format csv --operation payment --asset USDC:GISSUER --output activity.csv
+```
+
+`--since` and `--until` are inclusive ISO-8601 timestamps. Filters can be combined; supported transaction statuses are `success` and `failed`. Without `--max-transactions`, pagination continues until Horizon reports the end of the account history. A specified maximum, malformed records, or failed operation pages are reported in the JSON completeness summary; incomplete exports exit with status `1` rather than appearing complete. CSV output has a fixed header and repeats transaction context for each operation. A transaction with no matching operations is omitted when operation, asset, or counterparty filters are active.
+
+### Transaction Inclusion Delay
+
+Analyze one or more transaction hashes and optionally provide submission timestamps captured by a client:
+
+```bash
+npm run dev -- tx-inclusion-delay HASH1 HASH2 \
+  --submission HASH1=2026-01-01T12:00:00Z \
+  --confirmed-submission HASH2=2026-01-01T12:00:05Z \
+  --threshold-ms 30000 --json
+```
+
+Horizon transaction `created_at` and ledger `closed_at` are treated as inclusion/ledger timestamps, never as submission times. Submission-to-inclusion latency is calculated only for supplied ISO-8601 timestamps with an explicit timezone; user estimates and timestamps asserted as confirmed are aggregated separately. Missing or inconsistent timestamps and Horizon errors are listed as limitations, and the report marks its sample incomplete when measurements are unavailable.
 
 ### Sponsorship Audit
 Inspect sponsorship counters and sponsorship metadata visible from an account payload:

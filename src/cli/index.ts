@@ -121,6 +121,7 @@ import { formatValidatorIdentityAuditReport } from '../output/stellar-core-valid
 import { registerDantama022Commands } from './commands/dantama022';
 import dotenv from 'dotenv';
 import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
+import { registerOgunu7747Commands } from './commands/ogunu7747';
 
 dotenv.config();
 
@@ -884,6 +885,7 @@ program
   );
 
 registerFreezyyyArchCommands(program);
+registerOgunu7747Commands(program);
 registerStellarCoreOpsCommands(program);
 registerEmeka12Commands(program);
 
