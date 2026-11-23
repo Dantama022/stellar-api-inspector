@@ -73,3 +73,23 @@ export function validateEventQueryFilePath(value: string): true | string {
 export function validateMemoPrivacyRulesFilePath(value: string): true | string {
   return validateReadableFilePath(value, 'Memo privacy rules');
 }
+
+export function validateMetricsSnapshotFilePath(value: string): true | string {
+  return validateReadableFilePath(value, 'Metrics snapshot');
+}
+
+export function validateMetricsExportFilePath(value: string): true | string {
+  return validateReadableFilePath(value, 'Metrics export');
+}
+
+export function validateScpDiagnosticFilePath(value: string): true | string {
+  return validateReadableFilePath(value, 'SCP diagnostic');
+}
+
+export function validateStellarCoreConfigFilePath(value: string): true | string {
+  return validateReadableFilePath(value, 'Stellar Core config');
+}
+
+export function validateListeningInterfaceFilePath(value: string): true | string {
+  return validateReadableFilePath(value, 'Listening interface diagnostic');
+}
