@@ -13,6 +13,11 @@ import {
   discoverRpcCapabilities,
   formatCapabilityReport,
 } from '../../services/rpc-capability-discovery';
+import {
+  formatNetworkIdentityReports,
+  resolveExpectedNetwork,
+  verifyNetworkIdentity,
+} from '../../services/rpc-network-identity';
 
 interface BaseOptions {
   json?: boolean;
@@ -64,5 +69,32 @@ export function registerRpcDiagnosticsCommands(program: Command): void {
         formatCapabilityReport(reports),
       ];
     }),
+  );
+
+  withCommon(
+    program
+      .command('rpc-network-identity <urls...>')
+      .description('Verify Soroban RPC endpoints report the expected network passphrase/id (read-only).')
+      .option('--network <name>', 'Expected network: public, testnet or futurenet')
+      .option('--passphrase <passphrase>', 'Expected network passphrase (custom networks)')
+      .option('--network-id <hex>', 'Expected network id (sha256 of passphrase, hex)')
+      .option('--protocol-version <n>', 'Expected protocol version')
+      .option('--timeout <ms>', 'Request timeout in milliseconds', '10000'),
+  ).action(
+    (
+      urls: string[],
+      o: BaseOptions & { network?: string; passphrase?: string; networkId?: string; protocolVersion?: string; timeout: string },
+    ) =>
+      run(o, async () => {
+        const expected = resolveExpectedNetwork({
+          network: o.network,
+          passphrase: o.passphrase,
+          networkId: o.networkId,
+          protocolVersion: o.protocolVersion ? parseInt(o.protocolVersion, 10) : undefined,
+        });
+        const reports = [];
+        for (const u of urls) reports.push(await verifyNetworkIdentity(u, expected, { timeoutMs: parseInt(o.timeout, 10) }));
+        return [{ expected, reports }, formatNetworkIdentityReports(reports)];
+      }),
   );
 }
