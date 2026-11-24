@@ -31,6 +31,7 @@ import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { registerValreb001Commands } from './commands/valreb001';
+import { registerValrebAuditCommands } from './commands/valreb-audits';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { analyzeFeeBumpTransaction } from '../inspectors/fee-bump';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
@@ -235,6 +236,7 @@ function writeResult(
 // 1. Horizon Endpoint Checker
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
+registerValrebAuditCommands(program);
 registerDantama022Commands(program);
 
 
