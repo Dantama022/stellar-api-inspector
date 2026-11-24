@@ -28,6 +28,10 @@ export type InteractiveAction =
   | 'network-compat'
   | 'entry-ownership'
   | 'sep30-quorum'
+  | 'core-metrics'
+  | 'core-metrics-validate'
+  | 'core-scp-state'
+  | 'core-admin-endpoints'
   | 'exit';
 
 export interface InteractiveCommand {
@@ -98,6 +102,10 @@ export async function collectInteractiveCommand(
         { name: 'Network Fee & Protocol Compatibility Audit', value: 'network-compat' },
         { name: 'Ledger-Entry Ownership Audit', value: 'entry-ownership' },
         { name: 'SEP-30 Recovery Signer Quorum Audit', value: 'sep30-quorum' },
+        { name: 'Stellar Core Metrics Inspection', value: 'core-metrics' },
+        { name: 'Stellar Core Metrics Export Validation', value: 'core-metrics-validate' },
+        { name: 'Stellar Core SCP Consensus State Inspection', value: 'core-scp-state' },
+        { name: 'Stellar Core Administrative Endpoint Audit', value: 'core-admin-endpoints' },
         { name: 'Exit', value: 'exit' },
       ],
     },
@@ -144,6 +152,14 @@ export async function collectInteractiveCommand(
       return collectEntryOwnershipCommand(inquirer);
     case 'sep30-quorum':
       return collectSep30QuorumCommand(inquirer);
+    case 'core-metrics':
+      return collectCoreMetricsCommand(inquirer);
+    case 'core-metrics-validate':
+      return collectCoreMetricsValidateCommand(inquirer);
+    case 'core-scp-state':
+      return collectCoreScpStateCommand(inquirer);
+    case 'core-admin-endpoints':
+      return collectCoreAdminEndpointsCommand(inquirer);
     case 'exit':
       return null;
   }
@@ -909,5 +925,164 @@ async function collectSep30QuorumCommand(inquirer: PromptModule): Promise<Intera
     command: 'sep30-quorum',
     args: [answers.accountId, '--recovery-file', answers.recoveryFile, '--horizon', answers.horizon],
     summary: `stellar-api-inspector sep30-quorum ${answers.accountId} --recovery-file ${answers.recoveryFile} --horizon ${answers.horizon}`,
+  };
+}
+
+async function collectCoreMetricsCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    snapshots: string;
+    thresholds: string;
+    format: string;
+  }>([
+    {
+      type: 'input',
+      name: 'snapshots',
+      message: 'Prometheus metrics snapshot files, comma-separated',
+      validate: (value: string) => {
+        const snapshots = splitCsv(value);
+        if (snapshots.length === 0) return 'At least one snapshot file is required';
+        return true;
+      },
+    },
+    {
+      type: 'input',
+      name: 'thresholds',
+      message: 'Optional thresholds file (JSON)',
+    },
+    {
+      type: 'list',
+      name: 'format',
+      message: 'Report format',
+      choices: [
+        { name: 'Human-readable', value: 'text' },
+        { name: 'JSON', value: 'json' },
+      ],
+      default: 'text',
+    },
+  ]);
+
+  const snapshots = splitCsv(answers.snapshots);
+  const args = [...snapshots];
+  if (answers.thresholds.trim()) args.push('--thresholds', answers.thresholds.trim());
+  if (answers.format === 'json') args.push('--json');
+
+  return {
+    command: 'core-metrics',
+    args,
+    summary: `stellar-api-inspector core-metrics ${snapshots.join(' ')}`,
+  };
+}
+
+async function collectCoreMetricsValidateCommand(
+  inquirer: PromptModule,
+): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ files: string; format: string }>([
+    {
+      type: 'input',
+      name: 'files',
+      message: 'Prometheus metrics export files, comma-separated',
+      validate: (value: string) => {
+        const files = splitCsv(value);
+        if (files.length === 0) return 'At least one export file is required';
+        return true;
+      },
+    },
+    {
+      type: 'list',
+      name: 'format',
+      message: 'Report format',
+      choices: [
+        { name: 'Human-readable', value: 'text' },
+        { name: 'JSON', value: 'json' },
+      ],
+      default: 'text',
+    },
+  ]);
+
+  const files = splitCsv(answers.files);
+  const args = [...files];
+  if (answers.format === 'json') args.push('--json');
+
+  return {
+    command: 'core-metrics-validate',
+    args,
+    summary: `stellar-api-inspector core-metrics-validate ${files.join(' ')}`,
+  };
+}
+
+async function collectCoreScpStateCommand(inquirer: PromptModule): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{ snapshots: string; format: string }>([
+    {
+      type: 'input',
+      name: 'snapshots',
+      message: 'SCP diagnostic snapshot files, comma-separated',
+      validate: (value: string) => {
+        const snapshots = splitCsv(value);
+        if (snapshots.length === 0) return 'At least one snapshot file is required';
+        return true;
+      },
+    },
+    {
+      type: 'list',
+      name: 'format',
+      message: 'Report format',
+      choices: [
+        { name: 'Human-readable', value: 'text' },
+        { name: 'JSON', value: 'json' },
+      ],
+      default: 'text',
+    },
+  ]);
+
+  const snapshots = splitCsv(answers.snapshots);
+  const args = [...snapshots];
+  if (answers.format === 'json') args.push('--json');
+
+  return {
+    command: 'core-scp-state',
+    args,
+    summary: `stellar-api-inspector core-scp-state ${snapshots.join(' ')}`,
+  };
+}
+
+async function collectCoreAdminEndpointsCommand(
+  inquirer: PromptModule,
+): Promise<InteractiveCommand> {
+  const answers = await inquirer.prompt<{
+    config: string;
+    listening: string;
+    format: string;
+  }>([
+    {
+      type: 'input',
+      name: 'config',
+      message: 'Path to Stellar Core configuration file',
+      validate: validateNonEmpty,
+    },
+    {
+      type: 'input',
+      name: 'listening',
+      message: 'Optional listening-interface diagnostic file',
+    },
+    {
+      type: 'list',
+      name: 'format',
+      message: 'Report format',
+      choices: [
+        { name: 'Human-readable', value: 'text' },
+        { name: 'JSON', value: 'json' },
+      ],
+      default: 'text',
+    },
+  ]);
+
+  const args = [answers.config.trim()];
+  if (answers.listening.trim()) args.push('--listening', answers.listening.trim());
+  if (answers.format === 'json') args.push('--json');
+
+  return {
+    command: 'core-admin-endpoints',
+    args,
+    summary: `stellar-api-inspector core-admin-endpoints ${answers.config.trim()}`,
   };
 }
