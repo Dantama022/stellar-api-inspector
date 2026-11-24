@@ -124,6 +124,9 @@ import { registerDantama022Commands } from './commands/dantama022';
 import dotenv from 'dotenv';
 import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
 import { registerOgunu7747Commands } from './commands/ogunu7747';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
 
 dotenv.config();
 
@@ -218,6 +221,7 @@ function writeResult(
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
 registerDantama022Commands(program);
+
 
 program
   .command('horizon <url>')
@@ -1803,6 +1807,9 @@ registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
 registerWasmStaticAnalysisCommands(program);
 registerWasmBinaryCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
 registerRpcDiagnosticsCommands(program);
 registerAccountAssetDiagnosticsCommands(program);
 registerThanosmexcCommands(program);
