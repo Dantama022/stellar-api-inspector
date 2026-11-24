@@ -92,6 +92,7 @@ import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
 import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
 import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerRpcDiagnosticsCommands } from './commands/rpc-diagnostics';
 import { registerTransactionHorizonDiagnosticsCommands } from './commands/transaction-horizon-diagnostics';
 import { registerEmeka12Commands } from './commands/emeka-12';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
@@ -1802,6 +1803,7 @@ registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
 registerWasmStaticAnalysisCommands(program);
 registerWasmBinaryCommands(program);
+registerRpcDiagnosticsCommands(program);
 registerAccountAssetDiagnosticsCommands(program);
 registerThanosmexcCommands(program);
 
