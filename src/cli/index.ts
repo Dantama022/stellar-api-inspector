@@ -131,6 +131,11 @@ import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analy
 import { registerWasmBinaryCommands } from './commands/wasm-binary';
 import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
 import { registerWasmValidationAuditCommands } from './commands/wasm-validation-audit';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
+import { registerWasmValidationAuditCommands } from './commands/wasm-validation-audit';
+import { registerWasmCompatibilityAuditCommands } from './commands/wasm-compatibility-audit';
 
 dotenv.config();
 
@@ -1818,6 +1823,11 @@ registerWasmStaticAnalysisCommands(program);
 registerWasmBinaryCommands(program);
 registerWasmSectionAuditCommands(program);
 registerWasmValidationAuditCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
+registerWasmValidationAuditCommands(program);
+registerWasmCompatibilityAuditCommands(program);
 registerRpcDiagnosticsCommands(program);
 registerAccountAssetDiagnosticsCommands(program);
 registerThanosmexcCommands(program);
