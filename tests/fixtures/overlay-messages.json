@@ -1,0 +1,29 @@
+[
+  {
+    "id": "tx-set-request",
+    "timestamp": "2026-11-23T12:00:00Z",
+    "peerId": "peer-a",
+    "direction": "outbound",
+    "type": "GET_TX_SET",
+    "correlationId": "tx-set-42",
+    "payload": { "hash": "a1b2" }
+  },
+  {
+    "id": "tx-set-response",
+    "timestamp": "2026-11-23T12:00:01Z",
+    "peerId": "peer-a",
+    "direction": "inbound",
+    "type": "TX_SET",
+    "correlationId": "tx-set-42",
+    "payload": { "transactions": [] }
+  },
+  {
+    "id": "incomplete-peers-request",
+    "timestamp": "2026-11-23T12:00:02Z",
+    "peerId": "peer-b",
+    "direction": "outbound",
+    "type": "GET_PEERS",
+    "correlationId": "peers-7",
+    "payload": {}
+  }
+]
