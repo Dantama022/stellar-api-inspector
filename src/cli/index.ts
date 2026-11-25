@@ -22,11 +22,18 @@ import { formatContractInspectionReport } from '../output/contract-report';
 import { formatAccountMergeAudit } from '../output/account-merge-audit';
 import { auditAccount } from '../inspectors/account';
 import { auditAccountMerge, validateMergeAccountIds } from '../inspectors/account-merge-audit';
+import {
+  auditMergeDestinationCompatibility,
+  validateDestinationAuditIds,
+} from '../inspectors/account-merge-destination-audit';
+import { formatAccountMergeDestinationAudit } from '../output/account-merge-destination-audit';
 import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { registerValreb001Commands } from './commands/valreb001';
 import { registerOverlayFixtureWasmCommands } from './commands/overlay-fixture-wasm';
+import { registerOverlayAnalysisCommands } from './commands/overlay-analysis';
+import { registerValrebAuditCommands } from './commands/valreb-audits';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
 import { analyzeFeeBumpTransaction } from '../inspectors/fee-bump';
 import { validateTxTestConfig, runTxTest } from '../inspectors/tx-test';
@@ -43,7 +50,9 @@ import { formatRemainingQuota, formatResetTime } from '../utils/rate-limit';
 import { logger } from '../utils/logger';
 import { registerRdjSavyyCommands } from './commands/rdj-savyy';
 import { validateHorizonUrl } from '../utils/urls';
+import { registerFzAuditCommands } from './commands/fz-audits';
 import { registerFreezyyyArchCommands } from './commands/freezyyy-arch';
+import { registerRdjAuditInspectorsCommands } from './commands/rdj-audit-inspectors';
 import { LAG_WARNING_THRESHOLD } from '../utils/health-score';
 import { outputJsonError } from '../output/json';
 import { inspectSorobanContract } from '../services/soroban-contract';
@@ -82,10 +91,16 @@ import { auditAssetMetadata, AssetMetadataInput } from '../inspectors/asset-meta
 import { formatAssetMetadataAuditReport } from '../output/asset-metadata-audit-report';
 import { inspectTls } from '../services/tls-inspector';
 import { registerDevMakeemCommands } from './commands/dev-makeem';
+import { registerMakeemHorizonDiagCommands } from './commands/makeem-horizon-diag';
+import { registerThanosmexcCommands } from './commands/thanosmexc';
 import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
 import { registerSepCompliance4Commands } from './commands/sep-compliance-4';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerRpcDiagnosticsCommands } from './commands/rpc-diagnostics';
 import { registerTransactionHorizonDiagnosticsCommands } from './commands/transaction-horizon-diagnostics';
+import { registerEmeka12Commands } from './commands/emeka-12';
 import { inspectContractEnvMeta } from '../services/contract-env-meta';
 import { formatContractEnvMetaReport } from '../output/contract-env-meta-report';
 import { verifyTransactionSignatures } from '../services/signature-verifier';
@@ -111,7 +126,28 @@ import { auditConfigCompatibility } from '../services/stellar-core-config-compat
 import { formatConfigCompatAuditReport } from '../output/stellar-core-config-compat-audit-report';
 import { auditValidatorIdentity } from '../services/stellar-core-validator-identity-audit';
 import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
+import { registerDantama022Commands } from './commands/dantama022';
 import dotenv from 'dotenv';
+import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
+import { registerOgunu7747Commands } from './commands/ogunu7747';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
+import { registerWasmValidationAuditCommands } from './commands/wasm-validation-audit';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
+import { registerWasmValidationAuditCommands } from './commands/wasm-validation-audit';
+import { registerWasmCompatibilityAuditCommands } from './commands/wasm-compatibility-audit';
+import { registerWasmStaticAnalysisCommands } from './commands/wasm-static-analysis';
+import { registerWasmBinaryCommands } from './commands/wasm-binary';
+import { registerWasmSectionAuditCommands } from './commands/wasm-section-audit';
+import { registerWasmValidationAuditCommands } from './commands/wasm-validation-audit';
+import { registerWasmCompatibilityAuditCommands } from './commands/wasm-compatibility-audit';
+import { registerWasmInstructionAuditCommands } from './commands/wasm-instruction-audit';
 
 dotenv.config();
 
@@ -206,6 +242,10 @@ function writeResult(
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
 registerOverlayFixtureWasmCommands(program);
+registerOverlayAnalysisCommands(program);
+registerValrebAuditCommands(program);
+registerDantama022Commands(program);
+
 
 program
   .command('horizon <url>')
@@ -357,6 +397,7 @@ program
 // 2. Soroban RPC Checker
 // ---------------------------------------------------------------------------
 registerRdjSavyyCommands(program);
+registerFzAuditCommands(program);
 
 program
   .command('soroban <url>')
@@ -826,8 +867,59 @@ program
     },
   );
 
+// ---------------------------------------------------------------------------
+// Account Merge Destination Compatibility Audit (ISSUE-179)
+// ---------------------------------------------------------------------------
+program
+  .command('account-merge-destination-audit <sourceAccount> <destinationAccount>')
+  .description(
+    'Read-only audit of whether a destination account is compatible for receiving an account merge (ISSUE-179)',
+  )
+  .option('-h, --horizon <url>', 'Horizon server endpoint', 'https://horizon-testnet.stellar.org')
+  .option('-j, --json', 'Output raw JSON (machine-readable, suppresses colors and spinners)')
+  .option('-o, --output <path>', 'Save output to file')
+  .action(
+    async (
+      sourceAccount: string,
+      destinationAccount: string,
+      options: { horizon: string; json?: boolean; output?: string },
+    ) => {
+      if (options.json) logger.setJsonMode(true);
+      const validation = validateDestinationAuditIds(sourceAccount, destinationAccount);
+      if (!validation.valid) {
+        if (options.json) outputJsonError(validation.error!);
+        logger.error(validation.error!);
+        process.exit(1);
+      }
+
+      const spinner = makeSpinner(
+        'Inspecting destination account compatibility...',
+        !!options.json,
+      ).start();
+
+      try {
+        const report = await auditMergeDestinationCompatibility(
+          options.horizon,
+          sourceAccount,
+          destinationAccount,
+        );
+        spinner.succeed('Destination compatibility audit complete.');
+        writeResult(report, options, formatAccountMergeDestinationAudit(report));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        spinner.fail(message);
+        if (options.json) outputJsonError(message);
+        logger.error(message);
+        process.exit(1);
+      }
+    },
+  );
+
 registerFreezyyyArchCommands(program);
+registerRdjAuditInspectorsCommands(program);
+registerOgunu7747Commands(program);
 registerStellarCoreOpsCommands(program);
+registerEmeka12Commands(program);
 
 program
   .command('account-offers <accountId>')
@@ -1735,11 +1827,34 @@ program
   );
 
 registerDevMakeemCommands(program);
+registerMakeemHorizonDiagCommands(program);
 registerSepComplianceCommands(program);
 registerSepCompliance2Commands(program);
 registerSepCompliance3Commands(program);
 registerSepCompliance4Commands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
+registerWasmValidationAuditCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
+registerWasmValidationAuditCommands(program);
+registerWasmCompatibilityAuditCommands(program);
+registerWasmStaticAnalysisCommands(program);
+registerWasmBinaryCommands(program);
+registerWasmSectionAuditCommands(program);
+registerWasmValidationAuditCommands(program);
+registerWasmCompatibilityAuditCommands(program);
+registerWasmInstructionAuditCommands(program);
+registerRpcDiagnosticsCommands(program);
 registerAccountAssetDiagnosticsCommands(program);
+registerThanosmexcCommands(program);
 
 
 
@@ -4077,6 +4192,8 @@ program
       }
     },
   );
+
+registerEmmanuellruth55Commands(program);
 
 if (process.argv.length <= 2) {
   runInteractiveMode(process.argv, async (argv) => {
