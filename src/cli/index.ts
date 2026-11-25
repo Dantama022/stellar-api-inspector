@@ -31,6 +31,7 @@ import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { registerValreb001Commands } from './commands/valreb001';
+import { registerOverlayBatchInspectionCommands } from './commands/overlay-batch-inspection';
 import { registerLedgerOverlayInspectionCommands } from './commands/ledger-overlay-inspection';
 import { registerOverlayFixtureWasmCommands } from './commands/overlay-fixture-wasm';
 import { registerOverlayAnalysisCommands } from './commands/overlay-analysis';
@@ -242,6 +243,7 @@ function writeResult(
 // 1. Horizon Endpoint Checker
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
+registerOverlayBatchInspectionCommands(program);
 registerLedgerOverlayInspectionCommands(program);
 registerOverlayFixtureWasmCommands(program);
 registerOverlayAnalysisCommands(program);
