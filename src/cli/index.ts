@@ -31,6 +31,7 @@ import { fetchOrderBook } from '../inspectors/orderbook';
 import { runHealthDashboard } from '../inspectors/health';
 import { parseAsset } from '../utils/assets';
 import { registerValreb001Commands } from './commands/valreb001';
+import { registerOverlayFixtureWasmCommands } from './commands/overlay-fixture-wasm';
 import { registerOverlayAnalysisCommands } from './commands/overlay-analysis';
 import { registerValrebAuditCommands } from './commands/valreb-audits';
 import { decodeTransactionEnvelope } from '../inspectors/decode';
@@ -240,6 +241,7 @@ function writeResult(
 // 1. Horizon Endpoint Checker
 // ---------------------------------------------------------------------------
 registerValreb001Commands(program);
+registerOverlayFixtureWasmCommands(program);
 registerOverlayAnalysisCommands(program);
 registerValrebAuditCommands(program);
 registerDantama022Commands(program);
