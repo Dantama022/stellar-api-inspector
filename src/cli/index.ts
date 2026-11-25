@@ -88,6 +88,7 @@ import { auditAssetMetadata, AssetMetadataInput } from '../inspectors/asset-meta
 import { formatAssetMetadataAuditReport } from '../output/asset-metadata-audit-report';
 import { inspectTls } from '../services/tls-inspector';
 import { registerDevMakeemCommands } from './commands/dev-makeem';
+import { registerMakeemHorizonDiagCommands } from './commands/makeem-horizon-diag';
 import { registerThanosmexcCommands } from './commands/thanosmexc';
 import { registerSepCompliance2Commands } from './commands/sep-compliance-2';
 import { registerSepCompliance3Commands } from './commands/sep-compliance-3';
@@ -1820,6 +1821,7 @@ program
   );
 
 registerDevMakeemCommands(program);
+registerMakeemHorizonDiagCommands(program);
 registerSepComplianceCommands(program);
 registerSepCompliance2Commands(program);
 registerSepCompliance3Commands(program);
