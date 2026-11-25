@@ -1,3 +1,5 @@
+import { inspectWasmNames } from '../src/services/wasm-debug-metadata';
+describe('offline overlay fixtures and wasm metadata', () => {
 import { generateOverlayFixture } from '../src/services/overlay-fixtures';
 import { generateOverlayFuzzCases } from '../src/services/overlay-fuzz';
 import { inspectWasmNames } from '../src/services/wasm-debug-metadata';
