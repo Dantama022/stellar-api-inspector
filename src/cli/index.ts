@@ -129,6 +129,7 @@ import { formatConfigCompatAuditReport } from '../output/stellar-core-config-com
 import { auditValidatorIdentity } from '../services/stellar-core-validator-identity-audit';
 import { formatValidatorIdentityAuditReport } from '../output/stellar-core-validator-identity-audit-report';
 import { registerDantama022Commands } from './commands/dantama022';
+import { registerDantama022XdrCommands } from './commands/dantama022-xdr';
 import dotenv from 'dotenv';
 import { registerEmmanuellruth55Commands } from './commands/emmanuellruth55-gif';
 import { registerOgunu7747Commands } from './commands/ogunu7747';
@@ -249,6 +250,7 @@ registerOverlayFixtureWasmCommands(program);
 registerOverlayAnalysisCommands(program);
 registerValrebAuditCommands(program);
 registerDantama022Commands(program);
+registerDantama022XdrCommands(program);
 
 
 program
